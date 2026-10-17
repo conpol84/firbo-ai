@@ -8,6 +8,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from services.orchestrator.sessions import append_messages, ensure_session, read_session
 from services.orchestrator.tasks import (
     cancel_task,
     complete_task,
@@ -21,6 +22,7 @@ from services.orchestrator.verification import verify_gateway_result
 
 class ChatRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
+    session_id: str | None = None
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -76,6 +78,9 @@ async def health() -> dict[str, str]:
 @app.post("/v1/firbo/chat")
 async def chat(body: ChatRequest) -> dict[str, Any]:
     request_id = str(uuid.uuid4())
+    session_id = ensure_session(body.session_id)
+    append_messages(session_id, body.messages)
+
     payload: dict[str, Any] = {
         "model": body.model or os.getenv("FIRBO_DEFAULT_MODEL", "auto"),
         "messages": body.messages,
@@ -84,7 +89,24 @@ async def chat(body: ChatRequest) -> dict[str, Any]:
         payload["temperature"] = body.temperature
     if body.max_tokens is not None:
         payload["max_tokens"] = body.max_tokens
-    return await call_gateway(payload, request_id)
+
+    data = await call_gateway(payload, request_id)
+    verification = verify_gateway_result("chat", data)
+    if verification["assistant_text"]:
+        append_messages(
+            session_id,
+            [{"role": "assistant", "content": verification["assistant_text"]}],
+        )
+    data["firbo_session_id"] = session_id
+    return data
+
+
+@app.get("/v1/firbo/sessions/{session_id}")
+async def session_readback(session_id: str) -> dict[str, Any]:
+    session = read_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    return session
 
 
 @app.post("/v1/firbo/tasks")

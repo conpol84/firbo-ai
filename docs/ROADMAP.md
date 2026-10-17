@@ -4,11 +4,11 @@
 
 - [x] One monorepo with pinned OpenJarvis and OmniRoute
 - [x] Minimal FIRBO -> OmniRoute orchestrator bridge
-- [ ] Reproducible local quick start
-- [ ] Text conversation with persisted goal state
-- [ ] One verified research-to-report golden journey
-- [ ] Cancellation and duplicate-delivery tests
-- [ ] Public CI
+- [x] Reproducible local quick start
+- [x] Text conversation with persisted goal state
+- [x] One verified research-to-report golden journey
+- [x] Cancellation and duplicate-delivery tests
+- [x] Public CI
 
 ## v0.2
 
