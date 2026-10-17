@@ -1,3 +1,7 @@
+[submodule "packages/openjarvis"]
+	path = packages/openjarvis
+	url = https://github.com/open-jarvis/OpenJarvis.git
+	branch = main
 [submodule "packages/omniroute"]
 	path = packages/omniroute
 	url = https://github.com/conpol84/OmniRoute.git
