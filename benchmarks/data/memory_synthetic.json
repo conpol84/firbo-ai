@@ -1,0 +1,26 @@
+[
+  {
+    "id": "m1",
+    "text": "Ο χρήστης προτιμά να ταξιδεύει με πρωινές πτήσεις.",
+    "concepts": ["travel", "morning_flight"],
+    "aliases": ["proini ptisi", "proines ptiseis", "morning flight"]
+  },
+  {
+    "id": "m2",
+    "text": "Ο χρήστης θέλει οι τεχνικές αναφορές να είναι σύντομες και πρακτικές.",
+    "concepts": ["report_style", "concise"],
+    "aliases": ["syntomes anafores", "short reports", "praktikes anafores"]
+  },
+  {
+    "id": "m3",
+    "text": "The user prefers dark mode for developer tools.",
+    "concepts": ["ui_preference", "dark_mode"],
+    "aliases": ["skoteino thema", "dark theme", "dark mode"]
+  },
+  {
+    "id": "m4",
+    "text": "Ο χρήστης χρησιμοποιεί ελληνικά και Greeklish στις συνομιλίες.",
+    "concepts": ["language", "greeklish"],
+    "aliases": ["ellinika kai greeklish", "greeklish", "greek language"]
+  }
+]
