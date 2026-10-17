@@ -1,0 +1,4 @@
+[submodule "packages/omniroute"]
+	path = packages/omniroute
+	url = https://github.com/conpol84/OmniRoute.git
+	branch = release/v3.8.52
