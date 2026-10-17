@@ -59,6 +59,26 @@ FIRBO remains the authority for user/tenant scope, goals, tasks, approvals, memo
 results and audit. OmniRoute is the model/provider gateway. OpenJarvis supplies reusable
 agent/runtime capabilities. Neither dependency becomes a second FIRBO CEO.
 
+## One-command developer start
+
+Prerequisites: Git, Python 3, uv, Node.js/npm, and curl.
+
+```bash
+git clone --recurse-submodules https://github.com/conpol84/firbo-ai.git
+cd firbo-ai
+cp .env.example .env
+make up
+```
+
+`make up` initializes the pinned submodules, installs missing local dependencies, and starts OmniRoute, OpenJarvis, and the FIRBO orchestrator on loopback. Then use:
+
+```bash
+make doctor
+make down
+```
+
+Runtime logs and PID files stay under `.firbo/` and are ignored by Git.
+
 ## Quick developer bridge
 
 Copy `.env.example` to `.env`, start the pinned OmniRoute gateway using its own README,
