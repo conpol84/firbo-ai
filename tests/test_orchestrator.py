@@ -75,3 +75,50 @@ def test_cancel_task(monkeypatch, tmp_path):
     response = client.post(f"/v1/firbo/tasks/{row['id']}/cancel")
     assert response.status_code == 200
     assert response.json()["status"] == "cancelled"
+
+
+def test_chat_session_persists_and_reads_back(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIRBO_STATE_DB", str(tmp_path / "state.db"))
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "Session reply."}}
+                ]
+            }
+
+    async def fake_post(self, url, json, headers):
+        return FakeResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+
+    client = TestClient(app)
+    first = client.post(
+        "/v1/firbo/chat",
+        json={"messages": [{"role": "user", "content": "Remember this goal."}]},
+    )
+    assert first.status_code == 200
+    session_id = first.json()["firbo_session_id"]
+
+    readback = client.get(f"/v1/firbo/sessions/{session_id}")
+    assert readback.status_code == 200
+    messages = readback.json()["messages"]
+    assert messages[0]["content"] == "Remember this goal."
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"] == "Session reply."
+
+    second = client.post(
+        "/v1/firbo/chat",
+        json={
+            "session_id": session_id,
+            "messages": [{"role": "user", "content": "Continue the same goal."}],
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["firbo_session_id"] == session_id
+
+    again = client.get(f"/v1/firbo/sessions/{session_id}")
+    assert len(again.json()["messages"]) == 4
