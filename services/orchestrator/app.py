@@ -5,14 +5,30 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+from services.orchestrator.tasks import (
+    cancel_task,
+    complete_task,
+    create_or_get_task,
+    fail_task,
+    get_task,
+    public_task,
+)
+from services.orchestrator.verification import verify_gateway_result
 
 
 class ChatRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
     model: str | None = None
     temperature: float | None = None
+    max_tokens: int | None = None
+
+
+class TaskRequest(BaseModel):
+    goal: str = Field(min_length=3)
+    model: str | None = None
     max_tokens: int | None = None
 
 
@@ -27,23 +43,7 @@ def gateway_url() -> str:
     return base + path
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "firbo-orchestrator"}
-
-
-@app.post("/v1/firbo/chat")
-async def chat(body: ChatRequest) -> dict[str, Any]:
-    request_id = str(uuid.uuid4())
-    payload: dict[str, Any] = {
-        "model": body.model or os.getenv("FIRBO_DEFAULT_MODEL", "auto"),
-        "messages": body.messages,
-    }
-    if body.temperature is not None:
-        payload["temperature"] = body.temperature
-    if body.max_tokens is not None:
-        payload["max_tokens"] = body.max_tokens
-
+async def call_gateway(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
     headers = {"content-type": "application/json", "x-firbo-request-id": request_id}
     key = os.getenv("OMNIROUTE_API_KEY", "").strip()
     if key:
@@ -62,6 +62,86 @@ async def chat(body: ChatRequest) -> dict[str, Any]:
         )
 
     data = response.json()
-    if isinstance(data, dict):
-        data.setdefault("firbo_request_id", request_id)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="gateway_invalid_payload")
+    data.setdefault("firbo_request_id", request_id)
     return data
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "service": "firbo-orchestrator"}
+
+
+@app.post("/v1/firbo/chat")
+async def chat(body: ChatRequest) -> dict[str, Any]:
+    request_id = str(uuid.uuid4())
+    payload: dict[str, Any] = {
+        "model": body.model or os.getenv("FIRBO_DEFAULT_MODEL", "auto"),
+        "messages": body.messages,
+    }
+    if body.temperature is not None:
+        payload["temperature"] = body.temperature
+    if body.max_tokens is not None:
+        payload["max_tokens"] = body.max_tokens
+    return await call_gateway(payload, request_id)
+
+
+@app.post("/v1/firbo/tasks")
+async def run_task(
+    body: TaskRequest,
+    x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
+) -> dict[str, Any]:
+    row, created = create_or_get_task(body.goal, x_idempotency_key)
+    if not created:
+        return public_task(row)
+
+    task_id = row["id"]
+    request_id = str(uuid.uuid4())
+    payload: dict[str, Any] = {
+        "model": body.model or os.getenv("FIRBO_DEFAULT_MODEL", "auto"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are the execution specialist inside FIRBO. "
+                    "Complete the user's goal and return a concise, useful report."
+                ),
+            },
+            {"role": "user", "content": body.goal},
+        ],
+    }
+    if body.max_tokens is not None:
+        payload["max_tokens"] = body.max_tokens
+
+    try:
+        gateway_result = await call_gateway(payload, request_id)
+        verification = verify_gateway_result(body.goal, gateway_result)
+        if not verification["verified"]:
+            return public_task(fail_task(task_id, "verification_failed"))
+
+        result = {
+            "request_id": request_id,
+            "verification": verification,
+            "gateway": gateway_result,
+        }
+        return public_task(complete_task(task_id, result))
+    except HTTPException as exc:
+        fail_task(task_id, str(exc.detail))
+        raise
+
+
+@app.get("/v1/firbo/tasks/{task_id}")
+async def read_task(task_id: str) -> dict[str, Any]:
+    row = get_task(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return public_task(row)
+
+
+@app.post("/v1/firbo/tasks/{task_id}/cancel")
+async def cancel(task_id: str) -> dict[str, Any]:
+    row = cancel_task(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return public_task(row)
