@@ -20,4 +20,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r services/orchestrator/requirements.txt pytest
-      - run: pytest -q tests/test_orchestrator.py
+      - run: python -m pytest -q tests/test_orchestrator.py
