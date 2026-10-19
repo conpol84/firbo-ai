@@ -3,7 +3,7 @@
 # No git checkout, docker build, service install, Caddy, secrets, or DB changes.
 set -Eeuo pipefail
 umask 077
-PIN=2d8d350f0e1e8734495b6d3bbc9fec44fdb290e7
+PIN=e3cb766caf36f2aab868bf6131f4f51f2d8419cf
 BASE=https://raw.githubusercontent.com/conpol84/firbo-ai
 VENV=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
@@ -30,12 +30,14 @@ fetch_exact() {
   actual="$(git hash-object "$target")"
   [[ "$actual" == "$expected" ]] || die "source integrity mismatch: $path"
 }
-fetch_exact services/browser-mcp/firbo_browser_route.py 9d064992be8c840b7221c82f2ece157f26378c75
+fetch_exact services/browser-mcp/firbo_browser_route.py 4713422cccdfb9f0a1a6dfb4220220b9941e6f1a
 fetch_exact tests/test_browser_direct_intent.py a6f0f3282ad430f94e40a68e42f357eead77cfb6
 fetch_exact tests/test_generic_browser_goal_acceptance.py e6b9e22e3526e46c8f5084fb203b93605b3685f8
 fetch_exact tests/test_youtube_playback_acceptance.py bd8fc94a3d0c76306dd2174bc5103e5ae5373f3b
+fetch_exact tests/test_browser_aria_observation.py b40d895e1d9495f9ba3dfdad7e7078e21811fcb1
 SOURCE="$TMP/services/browser-mcp/firbo_browser_route.py"
 grep -q '^def _browser_goal_acceptance(' "$SOURCE" || die "generic browser acceptance absent"
+grep -q '^def _browser_accessibility_observation(' "$SOURCE" || die "AI accessibility snapshot missing"
 grep -q '^def _youtube_verified_result(' "$SOURCE" || die "playback verifier absent"
 grep -q '^def install_firbo_browser_route(' "$SOURCE" || die "route function absent"
 python3 -m py_compile "$SOURCE" || die "candidate Python syntax check failed"
@@ -44,6 +46,7 @@ cd "$TMP"
 python3 -m unittest discover -s tests -p test_browser_direct_intent.py -q
 python3 -m unittest discover -s tests -p test_generic_browser_goal_acceptance.py -q
 python3 -m unittest discover -s tests -p test_youtube_playback_acceptance.py -q
+python3 -m unittest discover -s tests -p test_browser_aria_observation.py -q
 ) || die "candidate browser regression tests failed"
 echo "FIRBO_SOURCE_AND_TESTS_PASS"
 SERVER_DIR="$(sudo -u jarvis "$VENV" - <<'PY'
