@@ -1,8 +1,8 @@
 """Restricted FIRBO cloud-browser routes for the existing OpenJarvis server.
 
 Installed into the existing `jarvis serve` process. No second server is created.
-The long-lived MCP client owned by OpenJarvis keeps Stagehand state alive across
-pause/resume calls for the same Browserbase session.
+The long-lived MCP client owned by OpenJarvis keeps self-hosted Playwright state
+alive across pause/resume calls for the same FIRBO browser session.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ MAX_BODY = 16 * 1024
 MAX_GOAL = 6000
 MAX_TURNS = 10
 EXECUTE_TOOL = "browser_session_execute"
+SNAPSHOT_TOOL = "browser_session_snapshot"
 CLOSE_TOOL = "browser_session_close"
 SESSION_CREATOR = "/usr/local/sbin/firbo-browser-session-create"
 
@@ -51,7 +52,7 @@ def _tool_name(tool: Any) -> str:
 
 
 def _browser_tools(app) -> dict[str, Any]:
-    allowed = {EXECUTE_TOOL, CLOSE_TOOL}
+    allowed = {EXECUTE_TOOL, SNAPSHOT_TOOL, CLOSE_TOOL}
     found: dict[str, Any] = {}
     for tool in list(getattr(app.state, "mcp_tools", []) or []):
         name = _tool_name(tool)
@@ -127,7 +128,7 @@ def install_firbo_browser_route(router) -> None:
         goal = str(body.get("goal", "")).strip()
 
         if (
-            action not in {"start", "run", "close"}
+            action not in {"start", "run", "frame", "close"}
             or not UUID_RE.fullmatch(request_id)
             or not UUID_RE.fullmatch(organization_id)
             or not UUID_RE.fullmatch(task_id)
@@ -143,6 +144,7 @@ def install_firbo_browser_route(router) -> None:
                 200,
                 {
                     "contract": "firbo-browser-session/v1",
+                    "provider": "selfhosted-playwright",
                     "request_id": request_id,
                     "organization_id": organization_id,
                     "task_id": task_id,
@@ -174,6 +176,32 @@ def install_firbo_browser_route(router) -> None:
                 },
             )
 
+        if action == "frame":
+            snapshot_tool = browser_tools.get(SNAPSHOT_TOOL)
+            if snapshot_tool is None:
+                return _json(503, {"error": "browser_snapshot_unavailable"})
+            try:
+                result = await asyncio.to_thread(snapshot_tool.execute, session_id=session_id)
+                payload = str(getattr(result, "content", "") or "")
+                parsed = json.loads(payload)
+                if parsed.get("ok") is not True:
+                    raise RuntimeError("browser_snapshot_failed")
+                return _json(
+                    200,
+                    {
+                        "contract": "firbo-browser-frame/v1",
+                        "request_id": request_id,
+                        "organization_id": organization_id,
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "status": "READY",
+                        "provider": "selfhosted-playwright",
+                        "frame": parsed,
+                    },
+                )
+            except Exception:
+                return _json(503, {"error": "browser_snapshot_failed"})
+
         if not goal or len(goal) > MAX_GOAL:
             return _json(400, {"error": "bad_request"})
         if execute_tool is None:
@@ -186,7 +214,7 @@ def install_firbo_browser_route(router) -> None:
 
         prompt = f"""You are FIRBO's restricted cloud-browser executor.
 You have exactly one tool: {EXECUTE_TOOL}.
-The only allowed Browserbase session is: {session_id}
+The only allowed FIRBO self-hosted browser session is: {session_id}
 The FIRBO task id is: {task_id}
 
 Goal:
@@ -224,12 +252,10 @@ Rules:
             needs_approval = reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL:")
             status = "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED")
 
-            # A paused task keeps its persistent Stagehand resource for resume.
-            # Terminal tasks disconnect the MCP handle; Browserbase release is
-            # still owned by the Supabase control plane.
-            if status != "PAUSED" and close_tool is not None:
-                await asyncio.to_thread(_close_session_tool, close_tool, session_id)
-
+            # Session lifecycle is owned by the FIRBO control plane. A paused
+            # task must remain resumable, and a terminal task stays alive just
+            # long enough for the control plane to capture its final Live View
+            # frame before issuing the explicit close action.
             return _json(
                 200,
                 {
@@ -239,6 +265,7 @@ Rules:
                     "task_id": task_id,
                     "session_id": session_id,
                     "status": status,
+                    "provider": "selfhosted-playwright",
                     "result": reply,
                     "execution_verified": verified,
                     "tool_count": len(browser_calls),

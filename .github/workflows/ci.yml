@@ -23,6 +23,22 @@ jobs:
       - run: python -m pytest -q tests
       - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh scripts/install-browser-mcp.sh\n      - run: node --check services/browser-mcp/server.mjs && node --check services/browser-mcp/create-session.mjs
       - run: |
+          node services/browser-mcp/create-session.mjs | node --input-type=module -e '
+            let data="";
+            process.stdin.on("data",c=>data+=c);
+            process.stdin.on("end",()=>{
+              const v=JSON.parse(data);
+              if(v.contract!=="firbo-browser-session/v1") process.exit(1);
+              if(v.provider!=="selfhosted-playwright") process.exit(1);
+              if(!/^[0-9a-f-]{36}$/i.test(v.session_id)) process.exit(1);
+              console.log("SELFHOSTED_SESSION_CONTRACT_PASS");
+            });'
+      - run: |
+          if grep -R -nE '@browserbase|BROWSERBASE_API_KEY|bb\.agents|browserbase\.connect|browserbase\.launch' services/browser-mcp scripts/install-browser-mcp.sh; then
+            echo "Browserbase dependency leaked into primary self-hosted runtime"
+            exit 1
+          fi
+      - run: |
           if grep -A 20 'new AsyncFunction' services/browser-mcp/server.mjs | grep -Eq '"(eval|arguments)"'; then
             echo "Forbidden strict-mode AsyncFunction binding found"
             exit 1
