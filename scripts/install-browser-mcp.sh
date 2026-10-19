@@ -15,7 +15,7 @@ IMAGE="firbo-browser-mcp:0.1.0"
 WRAPPER="/usr/local/sbin/firbo-browser-mcp"
 SUDOERS="/etc/sudoers.d/firbo-browser-mcp"
 
-for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$CONFIG" "$ENV_FILE"; do
+for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
   [[ -f "$required" ]] || { echo "Missing required file: $required" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
@@ -143,7 +143,9 @@ if isinstance(tools_enabled, list):
     set_key("tools", "enabled", json.dumps(merged))
 
 set_key("tools.mcp", "enabled", "true")
-set_key("tools.mcp", "servers", json.dumps(servers_path.name))
+# OpenJarvis versions in production reliably accept inline JSON here. Do not
+# depend on file-path expansion behavior that changed across releases.
+set_key("tools.mcp", "servers", repr(json.dumps(servers, separators=(",", ":"))))
 
 new_raw = "\n".join(lines) + "\n"
 tomllib.loads(new_raw)
@@ -186,6 +188,44 @@ if '"id":1' not in out1 or '"id":2' not in out2 or "browser_session_execute" not
 print("FIRBO_BROWSER_MCP_HANDSHAKE_PASS")
 PY
 
+echo "=== INSTALL RESTRICTED FIRBO BROWSER ROUTE ==="
+OPENJARVIS_SERVER_DIR="$(
+  sudo -u jarvis /home/jarvis/.openjarvis/.venv/bin/python - <<'PY'
+import pathlib
+import openjarvis.server
+print(pathlib.Path(openjarvis.server.__file__).resolve().parent)
+PY
+)"
+ROUTES_FILE="$OPENJARVIS_SERVER_DIR/routes.py"
+ROUTE_MODULE="$OPENJARVIS_SERVER_DIR/firbo_browser_route.py"
+test -f "$ROUTES_FILE"
+
+cp "$SERVICE_DIR/firbo_browser_route.py" "$ROUTE_MODULE"
+chown jarvis:jarvis "$ROUTE_MODULE"
+chmod 0644 "$ROUTE_MODULE"
+
+python3 - "$ROUTES_FILE" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+raw = path.read_text()
+hook = """# FIRBO_BROWSER_ROUTE_V1
+from openjarvis.server.firbo_browser_route import install_firbo_browser_route
+install_firbo_browser_route(router)
+"""
+if "FIRBO_BROWSER_ROUTE_V1" not in raw:
+    marker = '__all__ = ["router"]'
+    if marker not in raw:
+        raise SystemExit("OpenJarvis routes.py registration marker not found")
+    backup = path.with_suffix(path.suffix + ".firbo-browser.bak")
+    backup.write_text(raw)
+    raw = raw.replace(marker, hook + "\n" + marker, 1)
+    path.write_text(raw)
+PY
+
+chown jarvis:jarvis "$ROUTES_FILE"
+sudo -u jarvis /home/jarvis/.openjarvis/.venv/bin/python -m py_compile   "$ROUTE_MODULE" "$ROUTES_FILE"
+echo "FIRBO_BROWSER_ROUTE_SOURCE_VALID"
+
 echo "=== RESTART OPENJARVIS ==="
 systemctl restart openjarvis.service
 sleep 3
@@ -193,6 +233,14 @@ systemctl is-active --quiet openjarvis.service
 echo "OPENJARVIS_ACTIVE"
 
 echo "=== DISCOVERY CHECK ==="
-journalctl -u openjarvis.service -n 120 --no-pager | grep -E 'browser_session_execute|firbo-browser-session|MCP' | tail -40 || true
+journalctl -u openjarvis.service -n 120 --no-pager | grep -E 'browser_session_execute|firbo-browser-session|MCP|firbo/browser' | tail -40 || true
+
+echo "=== ROUTE AUTH CHECK ==="
+HTTP_CODE="$(curl -sS -o /tmp/firbo-browser-route-check.json -w '%{http_code}' \
+  -X POST http://127.0.0.1:8765/v1/firbo/browser \
+  -H 'content-type: application/json' \
+  --data '{}' || true)"
+test "$HTTP_CODE" = "401"
+echo "FIRBO_BROWSER_ROUTE_AUTH_PASS"
 
 echo "FIRBO_BROWSER_MCP_INSTALL_PASS"
