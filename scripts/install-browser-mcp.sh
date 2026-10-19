@@ -108,7 +108,13 @@ if isinstance(value, str) and value.strip():
 if not isinstance(servers, list):
     raise SystemExit("Existing MCP servers config is not a list")
 
-servers = [s for s in servers if isinstance(s, dict) and s.get("name") != "firbo-browser-session"]
+# Remove superseded Stagehand hosts. "firbo-stagehand" was the old raw
+# code_execute server and can delay startup or expose an unsafe generic code tool.
+servers = [
+    s for s in servers
+    if isinstance(s, dict)
+    and s.get("name") not in {"firbo-browser-session", "firbo-stagehand"}
+]
 servers.append({
     "name": "firbo-browser-session",
     "command": "sudo",
@@ -165,7 +171,8 @@ def rebuild_sections():
 
 tools_enabled = parsed.get("tools", {}).get("enabled")
 if isinstance(tools_enabled, list):
-    merged = list(dict.fromkeys([*tools_enabled, "browser_session_execute", "browser_session_close"]))
+    merged = [name for name in tools_enabled if name != "code_execute"]
+    merged = list(dict.fromkeys([*merged, "browser_session_execute", "browser_session_close"]))
     set_key("tools", "enabled", json.dumps(merged))
 
 set_key("tools.mcp", "enabled", "true")
@@ -259,15 +266,30 @@ echo "FIRBO_BROWSER_SESSION_CREATOR_READY"
 
 echo "=== RESTART OPENJARVIS ==="
 systemctl restart openjarvis.service
-sleep 3
+
+echo "=== WAIT FOR OPENJARVIS HTTP READY ==="
+READY=0
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 1 http://127.0.0.1:8765/health >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$READY" != "1" ]]; then
+  echo "OPENJARVIS_HTTP_NOT_READY"
+  systemctl status openjarvis.service --no-pager -l || true
+  journalctl -u openjarvis.service -n 160 --no-pager || true
+  exit 1
+fi
 systemctl is-active --quiet openjarvis.service
-echo "OPENJARVIS_ACTIVE"
+echo "OPENJARVIS_HTTP_READY"
 
 echo "=== DISCOVERY CHECK ==="
-journalctl -u openjarvis.service -n 120 --no-pager | grep -E 'browser_session_execute|firbo-browser-session|MCP|firbo/browser' | tail -40 || true
+journalctl -u openjarvis.service -n 160 --no-pager | grep -E 'browser_session_execute|firbo-browser-session|firbo-stagehand|code_execute|MCP|firbo/browser' | tail -60 || true
 
 echo "=== ROUTE AUTH CHECK ==="
-HTTP_CODE="$(curl -sS -o /tmp/firbo-browser-route-check.json -w '%{http_code}' \
+HTTP_CODE="$(curl -sS --max-time 3 -o /tmp/firbo-browser-route-check.json -w '%{http_code}' \
   -X POST http://127.0.0.1:8765/v1/firbo/browser \
   -H 'content-type: application/json' \
   --data '{}' || true)"
