@@ -31,7 +31,7 @@ class FakeTool:
         payload={"ok":self.good,"page":{"url":self.url,"title":"A Public Page"},
                  "value":{"url":self.url,"title":"A Public Page","accessibility":self.outline}}
         return types.SimpleNamespace(tool_name="browser_session_execute",success=self.good,
-                                     content=json.dumps(payload))
+                                     content=json.dumps(payload)[:12000])
 
 class AccessibilityObservationTests(unittest.TestCase):
     def test_site_neutral_navigation_observes_actual_aria_tree(self):
