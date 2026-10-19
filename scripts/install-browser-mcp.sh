@@ -13,6 +13,7 @@ MCP_JSON="/home/jarvis/.openjarvis/mcp-servers.json"
 ENV_FILE="/home/jarvis/.openjarvis/serve.env"
 IMAGE="firbo-browser-mcp:0.1.0"
 WRAPPER="/usr/local/sbin/firbo-browser-mcp"
+SESSION_WRAPPER="/usr/local/sbin/firbo-browser-session-create"
 SUDOERS="/etc/sudoers.d/firbo-browser-mcp"
 
 for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
@@ -49,8 +50,33 @@ EOF
 chmod 0755 "$WRAPPER"
 chown root:root "$WRAPPER"
 
+cat >"$SESSION_WRAPPER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ENV_FILE=/home/jarvis/.openjarvis/serve.env
+KEY="$(sed -n 's/^BROWSERBASE_API_KEY=//p' "$ENV_FILE" | tail -n1)"
+KEY="${KEY%\"}"; KEY="${KEY#\"}"
+KEY="${KEY%\'}"; KEY="${KEY#\'}"
+[[ -n "$KEY" ]] || { echo "BROWSERBASE_API_KEY missing" >&2; exit 1; }
+exec /usr/bin/docker run --rm \
+  --network bridge \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --memory 384m \
+  --cpus 1.0 \
+  --pids-limit 96 \
+  --entrypoint node \
+  -e BROWSERBASE_API_KEY="$KEY" \
+  firbo-browser-mcp:0.1.0 /app/create-session.mjs
+EOF
+chmod 0755 "$SESSION_WRAPPER"
+chown root:root "$SESSION_WRAPPER"
+
 cat >"$SUDOERS" <<'EOF'
 jarvis ALL=(root) NOPASSWD: /usr/local/sbin/firbo-browser-mcp
+jarvis ALL=(root) NOPASSWD: /usr/local/sbin/firbo-browser-session-create
 EOF
 chmod 0440 "$SUDOERS"
 visudo -cf "$SUDOERS"
@@ -225,6 +251,11 @@ PY
 chown jarvis:jarvis "$ROUTES_FILE"
 sudo -u jarvis /home/jarvis/.openjarvis/.venv/bin/python -m py_compile   "$ROUTE_MODULE" "$ROUTES_FILE"
 echo "FIRBO_BROWSER_ROUTE_SOURCE_VALID"
+
+echo "=== VERIFY FIXED SESSION-CREATOR WRAPPER ==="
+test -x "$SESSION_WRAPPER"
+sudo -u jarvis sudo -n -l "$SESSION_WRAPPER" >/dev/null
+echo "FIRBO_BROWSER_SESSION_CREATOR_READY"
 
 echo "=== RESTART OPENJARVIS ==="
 systemctl restart openjarvis.service
