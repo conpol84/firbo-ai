@@ -79,7 +79,11 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     target must be provided, with no local/private-network destinations.
     """
     message = goal.strip()
+    # Never turn a negative instruction into a browser navigation.
+    if re.match(r"^(?:do\s+not|don't|never|without|μην)\b", message, re.I):
+        return None
     url = ""
+    search_seed = False
     search = re.match(
         r"^(?:open|go to|navigate to|visit|load)\s+(?:the\s+)?(?:https://(?:www\.)?youtube\.com|youtube(?:\.com)?)\b",
         message, re.I,
@@ -98,9 +102,26 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
             r"^(?:open|navigate|visit|load|go to)\s+(?:to\s+)?(?:the\s+)?(https://[^\s<>\"']+)",
             message, re.I,
         )
-        if not match:
-            return None
-        url = match.group(1).rstrip(".,;")
+        if match:
+            url = match.group(1).rstrip(".,;")
+        else:
+            # General browser tasks may start with natural "search for ..."
+            # rather than a pasted URL. Seed a public search page, then let
+            # the SAME bounded ReAct agent observe/act/extract/verify.
+            # "earch" accommodates a dropped initial character in pasted
+            # speech/transcript text; it grants no new browser permission.
+            request = re.match(r"^(?:search|earch|find|look\s+up)\s+(?:for\s+)?(.+)$", message, re.I)
+            if not request:
+                return None
+            query = re.split(
+                r"(?:[,;.]\s*|\s+and\s+|\s+then\s+)"
+                r"(?=(?:open|click|read|extract|summarize|tell|verify|select|play|watch)\b)",
+                request.group(1), maxsplit=1, flags=re.I,
+            )[0].strip(" .\"'")
+            if not query or len(query) > 150 or "\n" in query or "://" in query:
+                return None
+            url = "https://www.google.com/search?q=" + quote_plus(query)
+            search_seed = True
 
     if len(url) > 2048:
         return None
@@ -125,7 +146,7 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
 
     # Extra requested operations require genuine agent/tool evidence, not a
     # navigation-only claim of success.
-    remaining = message[search.end():] if search else message[match.end():]
+    remaining = message if search_seed else (message[search.end():] if search else message[match.end():])
     needs_more = bool(re.search(
         r"\b(?:click|type|scroll|play|watch|download|submit|buy|sign\s+in|log\s+in|"
         r"subscribe|read|extract|summarize|capture|screenshot|return\s+(?:top|recent|"
@@ -141,7 +162,7 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         "url": url,
         "hostname": hostname,
         "expected_title": expected.group(1).strip() if expected else None,
-        "complete_on_navigation": not needs_more,
+        "complete_on_navigation": not search_seed and not needs_more,
     }
 
 
