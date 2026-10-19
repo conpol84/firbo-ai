@@ -8,14 +8,14 @@ import re
 import unittest
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 ROOT=Path(__file__).resolve().parents[1]
 TREE=ast.parse((ROOT/"services/browser-mcp/firbo_browser_route.py").read_text())
 names={"_browser_goal_requirements","_browser_goal_acceptance"}
 selected=[node for node in TREE.body if isinstance(node,ast.FunctionDef) and node.name in names]
 assert len(selected)==len(names)
-scope={"re":re,"Any":Any,"json":json,"urlsplit":urlsplit,"EXECUTE_TOOL":"browser_session_execute"}
+scope={"re":re,"Any":Any,"json":json,"urlsplit":urlsplit,"parse_qs":parse_qs,"EXECUTE_TOOL":"browser_session_execute"}
 exec(compile(ast.fix_missing_locations(ast.Module(body=selected,type_ignores=[])),str(ROOT), "exec"),scope)
 requirements=scope["_browser_goal_requirements"]
 accept=scope["_browser_goal_acceptance"]
