@@ -63,7 +63,7 @@ grep -q 'FIRBO_BROWSER_ROUTE_V1' "$REGISTER" || die "route registration missing"
 grep -q '^def install_firbo_browser_route(' "$ROUTE" || die "current route not owned by FIRBO"
 systemctl is-active --quiet openjarvis.service || die "service not active"
 route_http() {
-  curl --fail-with-body --silent --show-error --max-time 5 \
+  curl --silent --show-error --max-time 5 \
     --output /dev/null --write-out '%{http_code}' \
     --request POST --header 'content-type: application/json' \
     --data '{}' http://127.0.0.1:8765/v1/firbo/browser || true
