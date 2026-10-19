@@ -14,6 +14,15 @@ uuid(){ python3 -c 'import uuid; print(uuid.uuid4())'; }
 ORG="$(uuid)"
 TASK="$(uuid)"
 REQ1="$(uuid)"
+SESSION=""
+
+cleanup_browser_session(){
+  if [ -n "$SESSION" ]; then
+    CLEANUP_REQ="$(uuid)"
+    post "{\"action\":\"close\",\"request_id\":\"$CLEANUP_REQ\",\"organization_id\":\"$ORG\",\"task_id\":\"$TASK\",\"session_id\":\"$SESSION\"}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_browser_session EXIT
 
 post(){
   curl -fsS --max-time 120 \
@@ -70,5 +79,6 @@ assert v.get("contract")=="firbo-browser-close/v1",v
 assert v.get("status")=="CLOSED",v
 print("SELFHOSTED_BROWSER_CLOSE_PASS")
 '
+SESSION=""
 
 echo "FIRBO_SELFHOSTED_BROWSER_ACCEPTANCE_PASS"
