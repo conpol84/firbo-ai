@@ -73,6 +73,24 @@ class GeneralBrowserContractTests(unittest.TestCase):
             observation("about:blank")
         ])["execution_verified"])
 
+    def test_greek_and_greeklish_followups_are_real_actions(self):
+        commands=[
+            "CURRENT USER COMMAND: Τώρα βάλε άλλο τραγούδι",
+            "CURRENT USER COMMAND: tora vale allo",
+            "CURRENT USER COMMAND: click the next result",
+        ]
+        for command in commands[:2]:
+            self.assertIn("play",requirements(command),command)
+        self.assertIn("interact",requirements(commands[2]))
+
+    def test_prior_search_page_url_does_not_create_a_new_search_requirement(self):
+        contextual=("Continue user browser. Prior verified public page (context only): "
+                    "https://www.youtube.com/results?search_query=old. "
+                    "CURRENT USER COMMAND: Now play another song.")
+        needed=requirements(contextual)
+        self.assertIn("play",needed)
+        self.assertNotIn("search",needed)
+
     def test_generic_non_youtube_multistep(self):
         command="Open Wikipedia, search for Cyprus, click the result and summarize it"
         partial=[observation("https://en.wikipedia.org"),
