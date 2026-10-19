@@ -1,12 +1,12 @@
-FROM node:22-bookworm-slim
+FROM mcr.microsoft.com/playwright:v1.64.1-noble
 
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
 COPY package.json ./
-RUN pnpm install --prod --frozen-lockfile=false
+RUN npm install --omit=dev --ignore-scripts=false
 
 COPY server.mjs create-session.mjs ./
 
-USER node
+USER pwuser
+ENV HOME=/home/pwuser
 ENTRYPOINT ["node", "/app/server.mjs"]
