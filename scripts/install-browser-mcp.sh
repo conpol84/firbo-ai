@@ -15,8 +15,9 @@ IMAGE="firbo-browser-mcp:0.2.0"
 WRAPPER="/usr/local/sbin/firbo-browser-mcp"
 SESSION_WRAPPER="/usr/local/sbin/firbo-browser-session-create"
 SUDOERS="/etc/sudoers.d/firbo-browser-mcp"
+SECCOMP="/usr/local/share/firbo-playwright-seccomp.json"
 
-for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/create-session.mjs" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
+for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/create-session.mjs" "$SERVICE_DIR/seccomp_profile.json" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
   [[ -f "$required" ]] || { echo "Missing required file: $required" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
@@ -25,17 +26,21 @@ command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 echo "=== BUILD FIRBO BROWSER MCP IMAGE ==="
 docker build --pull=false -t "$IMAGE" "$SERVICE_DIR"
 
+echo "=== INSTALL PLAYWRIGHT SECCOMP PROFILE ==="
+install -o root -g root -m 0644 "$SERVICE_DIR/seccomp_profile.json" "$SECCOMP"
+
 echo "=== INSTALL ROOT-OWNED CONTAINER WRAPPER ==="
 cat >"$WRAPPER" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-exec /usr/bin/docker run --rm -i \
+exec /usr/bin/docker run --rm -i --init \
   --network bridge \
   --read-only \
   --tmpfs /tmp:rw,nosuid,size=1024m \
   --tmpfs /home/pwuser/.cache:rw,nosuid,size=256m \
   --cap-drop ALL \
   --security-opt no-new-privileges \
+  --security-opt seccomp=/usr/local/share/firbo-playwright-seccomp.json \
   --memory 1536m \
   --cpus 1.5 \
   --pids-limit 256 \
