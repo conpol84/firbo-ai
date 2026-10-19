@@ -11,6 +11,8 @@ computer/app connectors, **OpenJarvis**, and **OmniRoute** in one developer-faci
 
 **Production source of truth:** [FIRBO LOCKED PRODUCT SCOPE V1](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_LOCKED_PRODUCTION_PLAN_V1.md), then [Current Status Master Plan](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_MASTER_PLAN_CURRENT.md) and [live checkpoint #163](https://github.com/conpol84/Firbo-production/issues/163). This repo supplies runtime/tools only; do not create a second CEO, website, tasks or memory.
 
+> **Next FIRBO agent / runtime engineer:** start at the [LOCKED V1 operational handoff](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_NEXT_AGENT_EXECUTION_HANDOFF_2026-10-20.md) and [full legacy requirements crosswalk](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_V1_LEGACY_REQUIREMENTS_CROSSWALK.md). Preserve one CEO, one current FIRBO website, one Supabase task/memory authority and this repo as supporting runtime. No new feature additions without owner approval.
+
 ## Clone everything
 
 ```bash
