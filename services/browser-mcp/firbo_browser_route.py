@@ -13,8 +13,9 @@ import ipaddress
 import json
 import re
 import subprocess
+import unicodedata
 from typing import Any
-from urllib.parse import quote_plus, urlsplit
+from urllib.parse import quote_plus, urlsplit, parse_qs
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -144,6 +145,149 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     }
 
 
+
+
+def _latin_title(value: str) -> str:
+    """Deterministic Greek/Latin matching for titles; no fuzzy identity merges."""
+    greek = str.maketrans({
+        "α":"a","β":"v","γ":"g","δ":"d","ε":"e","ζ":"z",
+        "η":"i","θ":"th","ι":"i","κ":"k","λ":"l","μ":"m",
+        "ν":"n","ξ":"x","ο":"o","π":"p","ρ":"r","σ":"s",
+        "ς":"s","τ":"t","υ":"y","φ":"f","χ":"ch","ψ":"ps","ω":"o",
+    })
+    plain = "".join(char for char in unicodedata.normalize("NFKD", value.casefold()) if not unicodedata.combining(char))
+    return " ".join(re.findall(r"[a-z0-9]+", plain.translate(greek)))
+
+
+def _youtube_play_goal(goal: str) -> dict[str, str] | None:
+    """Only explicit YouTube search + PLAY/WATCH/OPEN VIDEO, not a plain search."""
+    cleaned = goal.strip()
+    site = re.match(
+        r"^(?:open\s+cloud\s+browser(?:\s+now)?[\s.,;:-]+)?"
+        r"(?:open|go\s+to|navigate\s+to|visit)\s+(?:the\s+)?"
+        r"(?:https://(?:www\.)?youtube\.com|youtube(?:\.com)?)\b", cleaned, re.I
+    )
+    if not site:
+        return None
+    remainder = cleaned[site.end():]
+    search = re.search(r"\bsearch(?:\s+(?:on|in)\s+youtube|\s+youtube)?\s+(?:for\s+)?(.+)", remainder, re.I)
+    playback = re.search(
+        r"\b(?:play|watch|start\s+playing|open\s+(?:the|a|first)\s+video|"
+        r"click\s+(?:the|a|first)\s+video|select\s+(?:the|a|first)\s+video)\b",
+        remainder, re.I,
+    )
+    if not search or not playback:
+        return None
+    query = re.split(
+        r"(?i)\s+and\s+(?=(?:play|watch|open|click|select|tell|show)\b)"
+        r"|(?i:\s+(?:play|watch|open|click|select)\s+(?:the|a|first)\s+video\b)"
+        r"|[.!?\n]", search.group(1), maxsplit=1,
+    )[0].strip(" .,\"'")
+    if not query or len(query) > 150 or not _latin_title(query):
+        return None
+    return {"query": query, "search_url": "https://www.youtube.com/results?search_query=" + quote_plus(query)}
+
+
+def _pick_youtube_video(candidates: list[dict[str, Any]], query: str) -> dict[str, str] | None:
+    tokens = set(_latin_title(query).split())
+    if not tokens or len(tokens) > 12:
+        return None
+    found: list[tuple[int,int,dict[str,str]]] = []
+    for position, item in enumerate(candidates[:15]):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")[:250]
+        href = str(item.get("url") or "")[:600]
+        channel = str(item.get("channel") or "")[:160]
+        try:
+            url = urlsplit(href)
+            if url.scheme != "https" or url.hostname not in ("www.youtube.com", "youtube.com") or url.path != "/watch":
+                continue
+            video_id = parse_qs(url.query).get("v", [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                continue
+        except ValueError:
+            continue
+        title_words = set(_latin_title(title).split())
+        # Fail closed on unrelated or partial titles, not random first video.
+        if not tokens.issubset(title_words):
+            continue
+        official = bool(re.search(r"\bofficial\b|επισημ", (title+" "+channel).casefold()))
+        found.append((int(official), -position, {"id": video_id, "title": title, "channel": channel, "url": "https://www.youtube.com/watch?v="+video_id}))
+    if not found:
+        return None
+    found.sort(reverse=True)
+    return found[0][2]
+
+
+def _youtube_verified_result(tool: Any, session_id: str, plan: dict[str,str]) -> dict[str, Any]:
+    """Run real MCP actions and verify selected /watch + media clock advancement."""
+    calls: list[dict[str, Any]] = []
+    first = _browser_step(tool, session_id, plan["search_url"])
+    calls.append(first["evidence"])
+    observed = str(first["page"].get("url", ""))
+    if not first["verified"] or urlsplit(observed).hostname not in ("youtube.com", "www.youtube.com") or not urlsplit(observed).path.startswith("/results"):
+        return {"ok": False, "error":"youtube_search_not_verified", "tools": calls}
+    listing_code = (
+        "await page.locator('ytd-video-renderer a#video-title[href*=\"watch?v=\"]').first().waitFor({state:'attached',timeout:12000});"
+        "return await page.locator('ytd-video-renderer a#video-title[href*=\"watch?v=\"]').evaluateAll("
+        "els=>els.slice(0,15).map(el=>({title:(el.getAttribute('title')||el.textContent||'').trim(),"
+        "url:el.href,channel:(el.closest('ytd-video-renderer')?.querySelector('#channel-name')?.textContent||'').trim()})));"
+    )
+    candidates_raw = _tool_result(tool.execute(session_id=session_id, code=listing_code))
+    calls.append(candidates_raw)
+    try:
+        parsed = json.loads(candidates_raw["output"])
+        candidates = parsed.get("value", [])
+    except (ValueError, TypeError):
+        candidates = []
+    selected = _pick_youtube_video(candidates, plan["query"]) if candidates_raw["success"] and isinstance(candidates,list) else None
+    if not selected:
+        return {"ok": False, "error":"youtube_video_not_verified", "tools": calls}
+    video_url=selected["url"]
+    play_code = (
+        "await page.goto(" + json.dumps(video_url) + ",{waitUntil:'domcontentloaded',timeout:25000});"
+        "await page.locator('video').first().waitFor({state:'attached',timeout:12000});"
+        "try{await page.locator('.ytp-large-play-button').click({timeout:2500});}catch(e){}"
+        "try{await page.evaluate(async()=>{const v=document.querySelector('video');if(v?.paused)await v.play();});}catch(e){}"
+        "const before=await page.evaluate(()=>{const v=document.querySelector('video');"
+        "return {paused:v?.paused!==false,time:Number(v?.currentTime||0)};});"
+        "await page.waitForTimeout(2200);"
+        "const after=await page.evaluate(()=>{const v=document.querySelector('video');"
+        "return {paused:v?.paused!==false,time:Number(v?.currentTime||0)};});"
+        "return {before,after,video_url:page.url(),video_title:await page.title()};"
+    )
+    played_raw = _tool_result(tool.execute(session_id=session_id, code=play_code))
+    calls.append(played_raw)
+    try:
+        payload = json.loads(played_raw["output"])
+        page = payload.get("page", {})
+        state = payload.get("value", {})
+    except (ValueError, TypeError):
+        page, state = {}, {}
+    current = str(page.get("url", "")) if isinstance(page,dict) else ""
+    try:
+        actual=urlsplit(current)
+        actual_id=parse_qs(actual.query).get("v", [""])[0]
+        watch_verified = actual.scheme=="https" and actual.hostname in ("www.youtube.com","youtube.com") and actual.path=="/watch" and actual_id==selected["id"]
+    except ValueError:
+        watch_verified=False
+    before = state.get("before", {}) if isinstance(state,dict) else {}
+    after = state.get("after", {}) if isinstance(state,dict) else {}
+    try:
+        playing = played_raw["success"] and watch_verified and after.get("paused") is False and float(after.get("time",0))-float(before.get("time",0))>=0.4
+    except (TypeError,ValueError):
+        playing = False
+    return {
+        "ok": bool(playing),
+        "video_page_verified": bool(watch_verified),
+        "playback_verified": bool(playing),
+        "video_url": video_url if watch_verified else None,
+        "video_title": selected["title"] if watch_verified else None,
+        "error": None if playing else "youtube_playback_unverified" if watch_verified else "youtube_video_page_unverified",
+        "tools": calls,
+    }
+
 def _browser_step(tool: Any, session_id: str, url: str) -> dict[str, Any]:
     """Execute a fixed browser action and require real MCP/Playwright evidence."""
     code = (
@@ -162,6 +306,128 @@ def _browser_step(tool: Any, session_id: str, url: str) -> dict[str, Any]:
         page = {}
     verified = evidence["success"] and payload.get("ok") is True and bool(page.get("url"))
     return {"evidence": evidence, "verified": verified, "page": page}
+
+
+
+def _browser_goal_requirements(goal: str) -> set[str]:
+    """Generic browser intents, not a catalog of sites, artists, or products."""
+    # A reconstructed session may include a prior URL containing 'search'.
+    # Only the CURRENT instruction determines what must be verified next.
+    raw = goal.rsplit("CURRENT USER COMMAND:",1)[-1].casefold()
+    text = "".join(char for char in unicodedata.normalize("NFKD",raw) if not unicodedata.combining(char))
+    needs: set[str] = {"navigate"}
+    if re.search(r"\b(search|find|look\s+for|look\s+up|google)\b|(?:ψαξ|αναζητ|βρε[ςι])", text):
+        needs.add("search")
+    if re.search(r"\b(click|select|press|open\s+(?:the|a|first|next)\s+(?:result|link|video)|scroll|type\s+(?:in|into)|fill)\b|(?:πατ[αη]|κανε\s+κλικ|επελεξ|γραψε\s+στο|σκρολ)", text):
+        needs.add("interact")
+    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε(?:\s+(?:αλλο|ενα|κατι|μου|το|την))?|\b(?:vale|paikse|vaz(e|o))\b|ακουσ|δες\s+το\s+βιντεο)", text):
+        needs.add("play")
+    if re.search(r"\b(read|extract|summarize|capture|tell\s+me\s+what|report\s+(?:the|what)|list\s+(?:the|top))\b|(?:διαβασε|συνοψισ|βγαλε\s+πληροφορι|πες\s+μου\s+τι)", text):
+        needs.add("read")
+    return needs
+
+
+def _browser_goal_acceptance(goal: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fail closed unless real Playwright observations cover EVERY goal step.
+
+    Tool success alone only proves that JavaScript ran, not that the user goal
+    was completed. This runs after the agent loop, never trusts assistant prose.
+    """
+    required = _browser_goal_requirements(goal)
+    observations: list[dict[str, Any]] = []
+    for call in calls:
+        if call.get("name") != EXECUTE_TOOL or call.get("success") is not True:
+            continue
+        try:
+            value = json.loads(str(call.get("output") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, dict) or value.get("ok") is not True:
+            continue
+        page = value.get("page")
+        if not isinstance(page, dict):
+            continue
+        url = str(page.get("url") or "")[:2048]
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not host or host=="localhost":
+                continue
+        except (TypeError,ValueError):
+            continue
+        observations.append({"url":url,"page":page,"value":value.get("value")})
+    last = observations[-1] if observations else {}
+    urls = [ob["url"] for ob in observations]
+    # A navigation cannot be reported from just a model answer or about:blank.
+    completed: set[str] = set()
+    if last and str(last["page"].get("title") or "").strip():
+        completed.add("navigate")
+    # A search requires a visible search URL or structured extracted matches.
+    if any(
+        re.search(r"(?:/search(?:/|[?#])|/results[?#]|[?&](?:q|query|search_query|search)=)", url, re.I)
+        for url in urls
+    ):
+        completed.add("search")
+    if any(
+        isinstance(ob["value"],dict) and isinstance(ob["value"].get("results"),list)
+        and len(ob["value"]["results"])>0 for ob in observations
+    ):
+        completed.add("search")
+    # A click/selection must change observed page state after initial navigation.
+    if len(observations)>=2 and len(set(urls))>=2:
+        completed.add("interact")
+    for ob in observations:
+        value=ob["value"]
+        if not isinstance(value,dict):
+            continue
+        # In-page interactions may not change URL; require before/after state.
+        if "before" in value and "after" in value and value["before"] != value["after"]:
+            completed.add("interact")
+        before,after=value.get("before"),value.get("after")
+        try:
+            if (
+                isinstance(before,dict) and isinstance(after,dict)
+                and after.get("paused") is False
+                and float(after.get("time",0))-float(before.get("time",0))>=0.4
+            ):
+                completed.add("play")
+        except (TypeError,ValueError):
+            pass
+        extracted=value.get("results") or value.get("items") or value.get("text")
+        if isinstance(extracted,list) and len(extracted)>0:
+            completed.add("read")
+        if isinstance(extracted,str) and len(extracted.strip())>=30:
+            completed.add("read")
+    if any(isinstance(ob["value"],str) and len(ob["value"].strip())>=30 for ob in observations):
+        completed.add("read")
+    missing=sorted(required-completed)
+    video_url=None
+    video_title=None
+    if "play" in completed and last:
+        try:
+            watched=urlsplit(str(last.get("url") or ""))
+            video_id=parse_qs(watched.query).get("v",[""])[0]
+            if (
+                watched.scheme=="https"
+                and watched.hostname in ("youtube.com","www.youtube.com")
+                and watched.path=="/watch"
+                and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id)
+            ):
+                video_url="https://www.youtube.com/watch?v="+video_id
+                video_title=str(last["page"].get("title") or "")[:180]
+        except (TypeError,ValueError):
+            pass
+    return {
+        "execution_verified":bool(observations) and not missing,
+        "verified_steps":sorted(required & completed),
+        "missing_steps":missing,
+        "current_url":last.get("url"),
+        "tool_observations":len(observations),
+        "playback_verified":"play" in completed,
+        "video_page_verified":bool(video_url),
+        "video_url":video_url,
+        "video_title":video_title,
+    }
 
 
 def _create_session_sync() -> str:
@@ -318,6 +584,42 @@ def install_firbo_browser_route(router) -> None:
         if engine is None or not model:
             return _json(503, {"error": "browser_executor_unavailable"})
 
+        # User explicitly asked to play/watch a YouTube search result. A
+        # successful search by itself must NEVER count as video playback.
+        video_plan = _youtube_play_goal(goal)
+        if video_plan:
+            try:
+                playback = await asyncio.to_thread(
+                    _youtube_verified_result, execute_tool, session_id, video_plan
+                )
+            except Exception:
+                return _json(503, {"error":"youtube_browser_execution_failed"})
+            tools = playback["tools"]
+            successful = bool(playback["ok"])
+            watch_url = playback.get("video_url")
+            description = (
+                f'Opened and verified playback: {playback["video_title"]} — {watch_url}. '
+                "Audio on your own device requires the FIRBO embedded YouTube player."
+                if successful else
+                f'YouTube playback could not be verified ({playback["error"]}). '
+                + (f'Video page: {watch_url}. Use the FIRBO player to hear it.' if watch_url else 'No verified video page.')
+            )
+            return _json(200, {
+                "contract": "firbo-browser-execution/v1",
+                "request_id": request_id, "organization_id": organization_id,
+                "task_id": task_id, "session_id": session_id,
+                "status": "COMPLETED" if successful else "FAILED",
+                "provider": "selfhosted-playwright",
+                "result": description,
+                "execution_verified": successful,
+                "video_page_verified": bool(playback.get("video_page_verified")),
+                "playback_verified": bool(playback.get("playback_verified")),
+                "video_url": watch_url, "video_title": playback.get("video_title"),
+                "tool_count": len(tools),
+                "failed_count": sum(not entry["success"] for entry in tools),
+                "tools": tools,
+            })
+
         # Deterministic fast path for common low-risk navigation/search goals.
         # NativeReActAgent may return prose without calling any tool; a browser
         # task must never claim success from the model's intention alone.
@@ -406,6 +708,10 @@ Rules:
 - Do not purchase, transfer money, delete data, publish/post, submit legal/financial forms, or perform another irreversible external action.
 - If the goal reaches one of those boundaries, stop BEFORE the action and return exactly:
   FIRBO_BROWSER_NEEDS_APPROVAL: <concise reason>
+- This is a GENERAL website agent, not a YouTube-only command processor. Use the exact same Playwright tool for other public websites, multi-step searches, navigation, forms, scrolling and reading.
+- Work as Observe → Act → Verify. For every requested action, capture real page state (URL/title plus returned DOM text, search results, before/after interaction state, or media time).
+- A successful navigation does NOT satisfy a request to search, click, read, or play. Continue performing actions until the requested result is observed.
+- If a step cannot be verified, report what remains incomplete and do not claim success.
 - Verify browser state before claiming completion.
 - Keep the final answer concise and factual.
 """
@@ -426,12 +732,14 @@ Rules:
             browser_calls = direct_evidence + [
                 item for item in evidence if item["name"] == EXECUTE_TOOL
             ]
-            verified = any(item["success"] for item in evidence if item["name"] == EXECUTE_TOOL)
-            # A preliminary navigation alone never verifies a multi-step goal.
+            receipt = _browser_goal_acceptance(goal, browser_calls)
+            verified = receipt["execution_verified"]
+            # Never infer fulfillment from an LLM reply or any single
+            # successful preliminary tool call.
             reply = str(result.content or "")[:12000]
-            if not verified:
-                reply = "Browser agent did not execute the required interactive actions."
             needs_approval = reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL:")
+            if not verified and not needs_approval:
+                reply = "Browser action incomplete; missing verified steps: " + ", ".join(receipt["missing_steps"])
             status = "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED")
 
             # Session lifecycle is owned by the FIRBO control plane. A paused
@@ -450,6 +758,13 @@ Rules:
                     "provider": "selfhosted-playwright",
                     "result": reply,
                     "execution_verified": verified,
+                    "verified_steps": receipt["verified_steps"],
+                    "missing_steps": receipt["missing_steps"],
+                    "tool_observations": receipt["tool_observations"],
+                    "playback_verified": receipt["playback_verified"],
+                    "video_page_verified": receipt["video_page_verified"],
+                    "video_url": receipt["video_url"],
+                    "video_title": receipt["video_title"],
                     "tool_count": len(browser_calls),
                     "failed_count": sum(not item["success"] for item in browser_calls),
                     "tools": browser_calls,
