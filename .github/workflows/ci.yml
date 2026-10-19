@@ -21,4 +21,4 @@ jobs:
           python-version: "3.12"
       - run: pip install -r services/orchestrator/requirements.txt pytest
       - run: python -m pytest -q tests
-      - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh
+      - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh scripts/install-browser-mcp.sh\n      - run: node --check services/browser-mcp/server.mjs && node --check services/browser-mcp/create-session.mjs
