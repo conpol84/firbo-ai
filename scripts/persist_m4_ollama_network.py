@@ -186,9 +186,11 @@ def check_file(path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["--check", "--apply"])
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="validate without changing any deployment files")
+    mode.add_argument("--apply", action="store_true", help="write backup and persist network config without restarting")
     args = parser.parse_args()
-    if args.mode == "--apply" and os.geteuid() != 0:
+    if args.apply and os.geteuid() != 0:
         raise Blocked("apply_requires_root")
     for f in (BASE, OVERLAY):
         check_file(f)
@@ -203,7 +205,7 @@ def main() -> int:
         after = get_config(candidate_path)
         verify_only_network_change(before, after, network)
     print("FIRBO_M4_NETWORK_PREFLIGHT_PASS")
-    if args.mode == "--check":
+    if args.check:
         return 0
     # Compare-and-swap: no one has edited the current overlay while validating.
     if OVERLAY.read_text(encoding="utf-8") != source:
