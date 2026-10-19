@@ -14,6 +14,7 @@ const BLOCKED_SOURCE =
   /\b(?:process|require|import\s*\(|child_process|node:|globalThis|Function|eval|WebSocket|Bun|Deno)\b/;
 
 const apiKey = String(process.env.BROWSERBASE_API_KEY || "").trim();
+delete process.env.BROWSERBASE_API_KEY;
 if (!apiKey) {
   process.stderr.write("BROWSERBASE_API_KEY is required\n");
   process.exit(1);
