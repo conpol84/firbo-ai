@@ -126,7 +126,6 @@ async function sessionState(sessionId) {
       "--disable-extensions",
       "--disable-sync",
       "--no-first-run",
-      "--no-sandbox",
     ],
   });
   try {
