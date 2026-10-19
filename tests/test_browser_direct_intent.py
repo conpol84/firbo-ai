@@ -59,6 +59,35 @@ class BrowserIntentTests(unittest.TestCase):
         self.assertIsNotNone(output)
         self.assertFalse(output["complete_on_navigation"])
 
+    def test_natural_search_starts_public_browser_without_a_url(self):
+        for command in [
+            "Search for Cyprus, open the Cyprus article, read its first paragraph and verify the URL",
+            "earch for Cyprus, open the Cyprus article, read its first paragraph and verify the URL",
+            "Find Cyprus and read the introduction",
+            "Look up Cyprus and summarize the first paragraph",
+        ]:
+            with self.subTest(command=command):
+                output = plan(command)
+                self.assertIsNotNone(output)
+                self.assertEqual(output["url"], "https://www.google.com/search?q=Cyprus")
+                self.assertEqual(output["hostname"], "www.google.com")
+                self.assertFalse(output["complete_on_navigation"])
+
+    def test_public_search_is_not_auto_completed_on_navigation(self):
+        output = plan("Search for Cyprus")
+        self.assertEqual(output["url"], "https://www.google.com/search?q=Cyprus")
+        self.assertFalse(output["complete_on_navigation"])
+
+    def test_negative_and_credential_bearing_searches_not_bootstrapped(self):
+        for command in [
+            "Do not search for Cyprus",
+            "Never search for Cyprus",
+            "Search for https://169.254.169.254",
+            "Search for https://user:password@example.com",
+        ]:
+            with self.subTest(command=command):
+                self.assertIsNone(plan(command))
+
     def test_no_implicit_browse_from_plain_web_fact(self):
         self.assertIsNone(plan("Tell me today's NFL scores"))
 
