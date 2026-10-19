@@ -3,7 +3,7 @@
 # No git checkout, docker build, service install, Caddy, secrets, or DB changes.
 set -Eeuo pipefail
 umask 077
-PIN=e3cb766caf36f2aab868bf6131f4f51f2d8419cf
+PIN=bf8d4158186593c696e8b044874ff866eec93264
 BASE=https://raw.githubusercontent.com/conpol84/firbo-ai
 VENV=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
@@ -30,8 +30,8 @@ fetch_exact() {
   actual="$(git hash-object "$target")"
   [[ "$actual" == "$expected" ]] || die "source integrity mismatch: $path"
 }
-fetch_exact services/browser-mcp/firbo_browser_route.py 4713422cccdfb9f0a1a6dfb4220220b9941e6f1a
-fetch_exact tests/test_browser_direct_intent.py a6f0f3282ad430f94e40a68e42f357eead77cfb6
+fetch_exact services/browser-mcp/firbo_browser_route.py 7ec2bfd13f7bd5165374bb7562c7a6551fccacdc
+fetch_exact tests/test_browser_direct_intent.py f1bceee803355c9485e7a98f802879fcfa8aab9f
 fetch_exact tests/test_generic_browser_goal_acceptance.py e6b9e22e3526e46c8f5084fb203b93605b3685f8
 fetch_exact tests/test_youtube_playback_acceptance.py bd8fc94a3d0c76306dd2174bc5103e5ae5373f3b
 fetch_exact tests/test_browser_aria_observation.py b40d895e1d9495f9ba3dfdad7e7078e21811fcb1
