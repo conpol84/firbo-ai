@@ -313,13 +313,14 @@ def _browser_goal_requirements(goal: str) -> set[str]:
     """Generic browser intents, not a catalog of sites, artists, or products."""
     # A reconstructed session may include a prior URL containing 'search'.
     # Only the CURRENT instruction determines what must be verified next.
-    text = goal.rsplit("CURRENT USER COMMAND:",1)[-1].casefold()
+    raw = goal.rsplit("CURRENT USER COMMAND:",1)[-1].casefold()
+    text = "".join(char for char in unicodedata.normalize("NFKD",raw) if not unicodedata.combining(char))
     needs: set[str] = {"navigate"}
     if re.search(r"\b(search|find|look\s+for|look\s+up|google)\b|(?:ψαξ|αναζητ|βρε[ςι])", text):
         needs.add("search")
     if re.search(r"\b(click|select|press|open\s+(?:the|a|first|next)\s+(?:result|link|video)|scroll|type\s+(?:in|into)|fill)\b|(?:πατ[αη]|κανε\s+κλικ|επελεξ|γραψε\s+στο|σκρολ)", text):
         needs.add("interact")
-    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε(?:\s+(?:αλλο|ενα|κατι|μου|το|την))?|ακουσ|δες\s+το\s+βιντεο)", text):
+    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε(?:\s+(?:αλλο|ενα|κατι|μου|το|την))?|\b(?:vale|paikse|vaz(e|o))\b|ακουσ|δες\s+το\s+βιντεο)", text):
         needs.add("play")
     if re.search(r"\b(read|extract|summarize|capture|tell\s+me\s+what|report\s+(?:the|what)|list\s+(?:the|top))\b|(?:διαβασε|συνοψισ|βγαλε\s+πληροφορι|πες\s+μου\s+τι)", text):
         needs.add("read")
