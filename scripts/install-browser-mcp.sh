@@ -11,7 +11,7 @@ SERVICE_DIR="$ROOT_DIR/services/browser-mcp"
 CONFIG="/home/jarvis/.openjarvis/config.toml"
 MCP_JSON="/home/jarvis/.openjarvis/mcp-servers.json"
 ENV_FILE="/home/jarvis/.openjarvis/serve.env"
-IMAGE="firbo-browser-mcp:0.1.0"
+IMAGE="firbo-browser-mcp:0.2.0"
 WRAPPER="/usr/local/sbin/firbo-browser-mcp"
 SESSION_WRAPPER="/usr/local/sbin/firbo-browser-session-create"
 SUDOERS="/etc/sudoers.d/firbo-browser-mcp"
@@ -29,23 +29,20 @@ echo "=== INSTALL ROOT-OWNED CONTAINER WRAPPER ==="
 cat >"$WRAPPER" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-ENV_FILE=/home/jarvis/.openjarvis/serve.env
-KEY="$(sed -n 's/^BROWSERBASE_API_KEY=//p' "$ENV_FILE" | tail -n1)"
-KEY="${KEY%\"}"; KEY="${KEY#\"}"
-KEY="${KEY%\'}"; KEY="${KEY#\'}"
-[[ -n "$KEY" ]] || { echo "BROWSERBASE_API_KEY missing" >&2; exit 1; }
 exec /usr/bin/docker run --rm -i \
   --network bridge \
   --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --tmpfs /tmp:rw,nosuid,size=1024m \
+  --tmpfs /home/pwuser/.cache:rw,nosuid,size=256m \
   --cap-drop ALL \
   --security-opt no-new-privileges \
-  --memory 512m \
-  --cpus 1.0 \
-  --pids-limit 128 \
-  -e BROWSERBASE_API_KEY="$KEY" \
+  --memory 1536m \
+  --cpus 1.5 \
+  --pids-limit 256 \
+  --shm-size 768m \
   -e FIRBO_BROWSER_MAX_SESSIONS=3 \
-  firbo-browser-mcp:0.1.0
+  -e FIRBO_BROWSER_IDLE_MS=1200000 \
+  firbo-browser-mcp:0.2.0
 EOF
 chmod 0755 "$WRAPPER"
 chown root:root "$WRAPPER"
@@ -53,23 +50,17 @@ chown root:root "$WRAPPER"
 cat >"$SESSION_WRAPPER" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-ENV_FILE=/home/jarvis/.openjarvis/serve.env
-KEY="$(sed -n 's/^BROWSERBASE_API_KEY=//p' "$ENV_FILE" | tail -n1)"
-KEY="${KEY%\"}"; KEY="${KEY#\"}"
-KEY="${KEY%\'}"; KEY="${KEY#\'}"
-[[ -n "$KEY" ]] || { echo "BROWSERBASE_API_KEY missing" >&2; exit 1; }
 exec /usr/bin/docker run --rm \
-  --network bridge \
+  --network none \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=32m \
   --cap-drop ALL \
   --security-opt no-new-privileges \
-  --memory 384m \
-  --cpus 1.0 \
-  --pids-limit 96 \
+  --memory 128m \
+  --cpus 0.25 \
+  --pids-limit 32 \
   --entrypoint node \
-  -e BROWSERBASE_API_KEY="$KEY" \
-  firbo-browser-mcp:0.1.0 /app/create-session.mjs
+  firbo-browser-mcp:0.2.0 /app/create-session.mjs
 EOF
 chmod 0755 "$SESSION_WRAPPER"
 chown root:root "$SESSION_WRAPPER"
@@ -119,7 +110,7 @@ servers.append({
     "name": "firbo-browser-session",
     "command": "sudo",
     "args": ["-n", "/usr/local/sbin/firbo-browser-mcp"],
-    "include_tools": ["browser_session_execute", "browser_session_close"],
+    "include_tools": ["browser_session_execute", "browser_session_snapshot", "browser_session_close"],
 })
 servers_path.write_text(json.dumps(servers, indent=2) + "\n")
 
@@ -172,7 +163,7 @@ def rebuild_sections():
 tools_enabled = parsed.get("tools", {}).get("enabled")
 if isinstance(tools_enabled, list):
     merged = [name for name in tools_enabled if name != "code_execute"]
-    merged = list(dict.fromkeys([*merged, "browser_session_execute", "browser_session_close"]))
+    merged = list(dict.fromkeys([*merged, "browser_session_execute", "browser_session_snapshot", "browser_session_close"]))
     set_key("tools", "enabled", json.dumps(merged))
 
 set_key("tools.mcp", "enabled", "true")
@@ -215,7 +206,7 @@ try:
     proc.wait(timeout=5)
 except subprocess.TimeoutExpired:
     proc.kill()
-if '"id":1' not in out1 or '"id":2' not in out2 or "browser_session_execute" not in out2:
+if '"id":1' not in out1 or '"id":2' not in out2 or "browser_session_execute" not in out2 or "browser_session_snapshot" not in out2:
     err = proc.stderr.read()[-2000:]
     raise SystemExit(f"MCP handshake failed\nstdout={out1}\n{out2}\nstderr={err}")
 print("FIRBO_BROWSER_MCP_HANDSHAKE_PASS")
@@ -296,4 +287,4 @@ HTTP_CODE="$(curl -sS --max-time 3 -o /tmp/firbo-browser-route-check.json -w '%{
 test "$HTTP_CODE" = "401"
 echo "FIRBO_BROWSER_ROUTE_AUTH_PASS"
 
-echo "FIRBO_BROWSER_MCP_INSTALL_PASS"
+echo "FIRBO_SELFHOSTED_BROWSER_MCP_INSTALL_PASS"
