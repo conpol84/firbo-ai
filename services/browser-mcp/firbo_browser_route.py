@@ -185,11 +185,20 @@ def _create_session_sync() -> str:
     return session_id
 
 
-def _close_session_tool(tool: Any, session_id: str) -> None:
+def _close_session_tool(tool: Any, session_id: str) -> bool:
+    """Do not acknowledge CLOSED unless the exact MCP tool confirmed it."""
     try:
-        tool.execute(session_id=session_id)
-    except Exception:
-        pass
+        evidence = _tool_result(tool.execute(session_id=session_id))
+        if not evidence["success"]:
+            return False
+        payload = json.loads(evidence["output"])
+        return (
+            isinstance(payload, dict)
+            and payload.get("ok") is True
+            and payload.get("session_id") == session_id
+        )
+    except (Exception,):
+        return False
 
 
 def install_firbo_browser_route(router) -> None:
@@ -258,7 +267,9 @@ def install_firbo_browser_route(router) -> None:
         if action == "close":
             if close_tool is None:
                 return _json(503, {"error": "browser_tool_unavailable"})
-            await asyncio.to_thread(_close_session_tool, close_tool, session_id)
+            closed = await asyncio.to_thread(_close_session_tool, close_tool, session_id)
+            if not closed:
+                return _json(503, {"error": "browser_session_close_unverified"})
             return _json(
                 200,
                 {
