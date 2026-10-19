@@ -311,13 +311,15 @@ def _browser_step(tool: Any, session_id: str, url: str) -> dict[str, Any]:
 
 def _browser_goal_requirements(goal: str) -> set[str]:
     """Generic browser intents, not a catalog of sites, artists, or products."""
-    text = goal.casefold()
+    # A reconstructed session may include a prior URL containing 'search'.
+    # Only the CURRENT instruction determines what must be verified next.
+    text = goal.rsplit("CURRENT USER COMMAND:",1)[-1].casefold()
     needs: set[str] = {"navigate"}
     if re.search(r"\b(search|find|look\s+for|look\s+up|google)\b|(?:ψαξ|αναζητ|βρε[ςι])", text):
         needs.add("search")
     if re.search(r"\b(click|select|press|open\s+(?:the|a|first|next)\s+(?:result|link|video)|scroll|type\s+(?:in|into)|fill)\b|(?:πατ[αη]|κανε\s+κλικ|επελεξ|γραψε\s+στο|σκρολ)", text):
         needs.add("interact")
-    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε\s+να\s+παιξει|ακουσ|δες\s+το\s+βιντεο)", text):
+    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε(?:\s+(?:αλλο|ενα|κατι|μου|το|την))?|ακουσ|δες\s+το\s+βιντεο)", text):
         needs.add("play")
     if re.search(r"\b(read|extract|summarize|capture|tell\s+me\s+what|report\s+(?:the|what)|list\s+(?:the|top))\b|(?:διαβασε|συνοψισ|βγαλε\s+πληροφορι|πες\s+μου\s+τι)", text):
         needs.add("read")
@@ -398,12 +400,32 @@ def _browser_goal_acceptance(goal: str, calls: list[dict[str, Any]]) -> dict[str
     if any(isinstance(ob["value"],str) and len(ob["value"].strip())>=30 for ob in observations):
         completed.add("read")
     missing=sorted(required-completed)
+    video_url=None
+    video_title=None
+    if "play" in completed and last:
+        try:
+            watched=urlsplit(str(last.get("url") or ""))
+            video_id=parse_qs(watched.query).get("v",[""])[0]
+            if (
+                watched.scheme=="https"
+                and watched.hostname in ("youtube.com","www.youtube.com")
+                and watched.path=="/watch"
+                and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id)
+            ):
+                video_url="https://www.youtube.com/watch?v="+video_id
+                video_title=str(last["page"].get("title") or "")[:180]
+        except (TypeError,ValueError):
+            pass
     return {
         "execution_verified":bool(observations) and not missing,
         "verified_steps":sorted(required & completed),
         "missing_steps":missing,
         "current_url":last.get("url"),
         "tool_observations":len(observations),
+        "playback_verified":"play" in completed,
+        "video_page_verified":bool(video_url),
+        "video_url":video_url,
+        "video_title":video_title,
     }
 
 
@@ -738,6 +760,10 @@ Rules:
                     "verified_steps": receipt["verified_steps"],
                     "missing_steps": receipt["missing_steps"],
                     "tool_observations": receipt["tool_observations"],
+                    "playback_verified": receipt["playback_verified"],
+                    "video_page_verified": receipt["video_page_verified"],
+                    "video_url": receipt["video_url"],
+                    "video_title": receipt["video_title"],
                     "tool_count": len(browser_calls),
                     "failed_count": sum(not item["success"] for item in browser_calls),
                     "tools": browser_calls,
