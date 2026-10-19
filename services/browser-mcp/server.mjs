@@ -165,7 +165,6 @@ async function executeCode(state, code, signal) {
     "fetch",
     "globalThis",
     "Function",
-    "eval",
     "WebSocket",
     '"use strict";\n' + code,
   );
@@ -175,7 +174,6 @@ async function executeCode(state, code, signal) {
       page,
       context,
       localConsole,
-      undefined,
       undefined,
       undefined,
       undefined,
