@@ -16,7 +16,7 @@ WRAPPER="/usr/local/sbin/firbo-browser-mcp"
 SESSION_WRAPPER="/usr/local/sbin/firbo-browser-session-create"
 SUDOERS="/etc/sudoers.d/firbo-browser-mcp"
 
-for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
+for required in "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR/package.json" "$SERVICE_DIR/server.mjs" "$SERVICE_DIR/create-session.mjs" "$SERVICE_DIR/firbo_browser_route.py" "$CONFIG" "$ENV_FILE"; do
   [[ -f "$required" ]] || { echo "Missing required file: $required" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
