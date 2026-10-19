@@ -308,6 +308,105 @@ def _browser_step(tool: Any, session_id: str, url: str) -> dict[str, Any]:
     return {"evidence": evidence, "verified": verified, "page": page}
 
 
+
+def _browser_goal_requirements(goal: str) -> set[str]:
+    """Generic browser intents, not a catalog of sites, artists, or products."""
+    text = goal.casefold()
+    needs: set[str] = {"navigate"}
+    if re.search(r"\b(search|find|look\s+for|look\s+up|google)\b|(?:ψαξ|αναζητ|βρε[ςι])", text):
+        needs.add("search")
+    if re.search(r"\b(click|select|press|open\s+(?:the|a|first|next)\s+(?:result|link|video)|scroll|type\s+(?:in|into)|fill)\b|(?:πατ[αη]|κανε\s+κλικ|επελεξ|γραψε\s+στο|σκρολ)", text):
+        needs.add("interact")
+    if re.search(r"\b(play|watch|start\s+playing|listen|open\s+(?:the|a|first|next)\s+video)\b|(?:παιξε|βαλε\s+να\s+παιξει|ακουσ|δες\s+το\s+βιντεο)", text):
+        needs.add("play")
+    if re.search(r"\b(read|extract|summarize|capture|tell\s+me\s+what|report\s+(?:the|what)|list\s+(?:the|top))\b|(?:διαβασε|συνοψισ|βγαλε\s+πληροφορι|πες\s+μου\s+τι)", text):
+        needs.add("read")
+    return needs
+
+
+def _browser_goal_acceptance(goal: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fail closed unless real Playwright observations cover EVERY goal step.
+
+    Tool success alone only proves that JavaScript ran, not that the user goal
+    was completed. This runs after the agent loop, never trusts assistant prose.
+    """
+    required = _browser_goal_requirements(goal)
+    observations: list[dict[str, Any]] = []
+    for call in calls:
+        if call.get("name") != EXECUTE_TOOL or call.get("success") is not True:
+            continue
+        try:
+            value = json.loads(str(call.get("output") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, dict) or value.get("ok") is not True:
+            continue
+        page = value.get("page")
+        if not isinstance(page, dict):
+            continue
+        url = str(page.get("url") or "")[:2048]
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not host or host=="localhost":
+                continue
+        except (TypeError,ValueError):
+            continue
+        observations.append({"url":url,"page":page,"value":value.get("value")})
+    last = observations[-1] if observations else {}
+    urls = [ob["url"] for ob in observations]
+    # A navigation cannot be reported from just a model answer or about:blank.
+    completed: set[str] = set()
+    if last and str(last["page"].get("title") or "").strip():
+        completed.add("navigate")
+    # A search requires a visible search URL or structured extracted matches.
+    if any(
+        re.search(r"(?:/search(?:/|[?#])|/results[?#]|[?&](?:q|query|search_query|search)=)", url, re.I)
+        for url in urls
+    ):
+        completed.add("search")
+    if any(
+        isinstance(ob["value"],dict) and isinstance(ob["value"].get("results"),list)
+        and len(ob["value"]["results"])>0 for ob in observations
+    ):
+        completed.add("search")
+    # A click/selection must change observed page state after initial navigation.
+    if len(observations)>=2 and len(set(urls))>=2:
+        completed.add("interact")
+    for ob in observations:
+        value=ob["value"]
+        if not isinstance(value,dict):
+            continue
+        # In-page interactions may not change URL; require before/after state.
+        if "before" in value and "after" in value and value["before"] != value["after"]:
+            completed.add("interact")
+        before,after=value.get("before"),value.get("after")
+        try:
+            if (
+                isinstance(before,dict) and isinstance(after,dict)
+                and after.get("paused") is False
+                and float(after.get("time",0))-float(before.get("time",0))>=0.4
+            ):
+                completed.add("play")
+        except (TypeError,ValueError):
+            pass
+        extracted=value.get("results") or value.get("items") or value.get("text")
+        if isinstance(extracted,list) and len(extracted)>0:
+            completed.add("read")
+        if isinstance(extracted,str) and len(extracted.strip())>=30:
+            completed.add("read")
+    if any(isinstance(ob["value"],str) and len(ob["value"].strip())>=30 for ob in observations):
+        completed.add("read")
+    missing=sorted(required-completed)
+    return {
+        "execution_verified":bool(observations) and not missing,
+        "verified_steps":sorted(required & completed),
+        "missing_steps":missing,
+        "current_url":last.get("url"),
+        "tool_observations":len(observations),
+    }
+
+
 def _create_session_sync() -> str:
     completed = subprocess.run(
         ["sudo", "-n", SESSION_CREATOR],
@@ -586,6 +685,10 @@ Rules:
 - Do not purchase, transfer money, delete data, publish/post, submit legal/financial forms, or perform another irreversible external action.
 - If the goal reaches one of those boundaries, stop BEFORE the action and return exactly:
   FIRBO_BROWSER_NEEDS_APPROVAL: <concise reason>
+- This is a GENERAL website agent, not a YouTube-only command processor. Use the exact same Playwright tool for other public websites, multi-step searches, navigation, forms, scrolling and reading.
+- Work as Observe → Act → Verify. For every requested action, capture real page state (URL/title plus returned DOM text, search results, before/after interaction state, or media time).
+- A successful navigation does NOT satisfy a request to search, click, read, or play. Continue performing actions until the requested result is observed.
+- If a step cannot be verified, report what remains incomplete and do not claim success.
 - Verify browser state before claiming completion.
 - Keep the final answer concise and factual.
 """
@@ -606,12 +709,14 @@ Rules:
             browser_calls = direct_evidence + [
                 item for item in evidence if item["name"] == EXECUTE_TOOL
             ]
-            verified = any(item["success"] for item in evidence if item["name"] == EXECUTE_TOOL)
-            # A preliminary navigation alone never verifies a multi-step goal.
+            receipt = _browser_goal_acceptance(goal, browser_calls)
+            verified = receipt["execution_verified"]
+            # Never infer fulfillment from an LLM reply or any single
+            # successful preliminary tool call.
             reply = str(result.content or "")[:12000]
-            if not verified:
-                reply = "Browser agent did not execute the required interactive actions."
             needs_approval = reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL:")
+            if not verified and not needs_approval:
+                reply = "Browser action incomplete; missing verified steps: " + ", ".join(receipt["missing_steps"])
             status = "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED")
 
             # Session lifecycle is owned by the FIRBO control plane. A paused
@@ -630,6 +735,9 @@ Rules:
                     "provider": "selfhosted-playwright",
                     "result": reply,
                     "execution_verified": verified,
+                    "verified_steps": receipt["verified_steps"],
+                    "missing_steps": receipt["missing_steps"],
+                    "tool_observations": receipt["tool_observations"],
                     "tool_count": len(browser_calls),
                     "failed_count": sum(not item["success"] for item in browser_calls),
                     "tools": browser_calls,
