@@ -22,3 +22,9 @@ jobs:
       - run: pip install -r services/orchestrator/requirements.txt pytest
       - run: python -m pytest -q tests
       - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh scripts/install-browser-mcp.sh\n      - run: node --check services/browser-mcp/server.mjs && node --check services/browser-mcp/create-session.mjs
+      - run: |
+          if grep -A 20 'new AsyncFunction' services/browser-mcp/server.mjs | grep -Eq '"(eval|arguments)"'; then
+            echo "Forbidden strict-mode AsyncFunction binding found"
+            exit 1
+          fi
+          node --input-type=module -e 'const A=Object.getPrototypeOf(async function(){}).constructor; new A("page","context","console","process","require","fetch","globalThis","Function","WebSocket","\"use strict\"; return 1;"); console.log("STRICT_ASYNC_FUNCTION_PASS")'
