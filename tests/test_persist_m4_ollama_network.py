@@ -58,6 +58,50 @@ networks:
         with self.assertRaises(module.Blocked):
             module.patch_memory_overlay('services:\n  firbo-api:\n', 'hostinger_default')
 
+    def test_compose_cli_normalizes_external_network_fields(self):
+        """Compose JSON may omit redundant external:true or emit empty defaults."""
+        base={
+            "name":"hostinger",
+            "services":{
+                "firbo-api":{"networks":{"default":None}},
+                "redis":{"networks":{"default":None}},
+            },
+            "networks":{"default":{"name":"hostinger_default"}},
+        }
+        import copy
+        for representation in (
+            {"name":network},
+            {"name":network,"external":True},
+            {"name":network,"external":True,"labels":{},"ipam":{}},
+            {"name":network,"external":True,"attachable":False,"driver":None},
+        ):
+            with self.subTest(representation=representation):
+                result=copy.deepcopy(base)
+                result["services"]["firbo-api"]["networks"]["firbo_ollama_external"]=None
+                result["networks"]["firbo_ollama_external"]=representation
+                module.verify_only_network_change(base,result,network)
+
+    def test_rejects_non_external_or_reconfigured_network(self):
+        import copy
+        base={
+            "services":{"firbo-api":{"networks":{"default":None}}},
+            "networks":{"default":{"name":"hostinger_default"}},
+        }
+        for forbidden in (
+            {"name":network,"external":False},
+            {"name":"different_network","external":True},
+            {"name":network,"external":True,"driver":"bridge"},
+            {"name":network,"external":True,"labels":{"owner":"tampered"}},
+            {"name":network,"external":True,"ipam":{"driver":"default"}},
+            {"name":network,"external":True,"unknown":"unexpected"},
+        ):
+            with self.subTest(forbidden=forbidden):
+                candidate=copy.deepcopy(base)
+                candidate["services"]["firbo-api"]["networks"]["firbo_ollama_external"]=None
+                candidate["networks"]["firbo_ollama_external"]=forbidden
+                with self.assertRaises(module.Blocked):
+                    module.verify_only_network_change(base,candidate,network)
+
     def test_semantic_diff_only_permits_exact_new_network(self):
         before={
             "name":"hostinger",
