@@ -163,10 +163,31 @@ def verify_only_network_change(before: dict, after: dict, network: str) -> None:
         raise Blocked("complex_primary_network_requires_review")
     if set(added_nets) != {"default", NETWORK_KEY}:
         raise Blocked("required_networks_not_preserved")
-    if (candidate.get("networks") or {}).get(NETWORK_KEY) != {
-        "name": network, "external": True
-    }:
-        raise Blocked("external_network_definition_changed")
+    # docker compose config --format json is a normalized *rendering*, not
+    # guaranteed to preserve a source YAML network stanza byte-for-byte.
+    # Different CLI releases can omit external:true once the external name is
+    # resolved, or emit harmless empty/default fields. The source patch above
+    # itself always writes external:true and the existing network name.
+    # Keep a STRICT allowlist here: never accept changed names, explicit
+    # external:false, drivers, nonempty IPAM/labels or unrelated network config.
+    definition = (candidate.get("networks") or {}).get(NETWORK_KEY)
+    if not isinstance(definition, dict) or definition.get("name") != network:
+        raise Blocked("external_network_name_mismatch")
+    if "external" in definition and definition["external"] is not True:
+        raise Blocked("external_network_not_external")
+    empty_defaults = {
+        "labels": ({}, None),
+        "driver_opts": ({}, None),
+        "ipam": ({}, None),
+        "driver": (None, ""),
+        "attachable": (False, None),
+        "internal": (False, None),
+    }
+    for attribute, value in definition.items():
+        if attribute in ("name", "external"):
+            continue
+        if attribute not in empty_defaults or value not in empty_defaults[attribute]:
+            raise Blocked("external_network_has_unexpected_attributes")
     candidate["networks"].pop(NETWORK_KEY)
     if "networks" not in original:
         candidate.pop("networks", None)
