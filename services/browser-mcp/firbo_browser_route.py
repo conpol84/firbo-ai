@@ -252,12 +252,10 @@ Rules:
             needs_approval = reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL:")
             status = "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED")
 
-            # A paused task keeps its persistent Stagehand resource for resume.
-            # Terminal tasks disconnect the MCP handle; Browserbase release is
-            # still owned by the Supabase control plane.
-            if status != "PAUSED" and close_tool is not None:
-                await asyncio.to_thread(_close_session_tool, close_tool, session_id)
-
+            # Session lifecycle is owned by the FIRBO control plane. A paused
+            # task must remain resumable, and a terminal task stays alive just
+            # long enough for the control plane to capture its final Live View
+            # frame before issuing the explicit close action.
             return _json(
                 200,
                 {
