@@ -94,7 +94,7 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
             url = "https://www.youtube.com/"
     else:
         match = re.match(
-            r"^(?:open|navigate|visit|load|go to)\s+(?:the\s+)?(https://[^\s<>\"']+)",
+            r"^(?:open|navigate|visit|load|go to)\s+(?:to\s+)?(?:the\s+)?(https://[^\s<>\"']+)",
             message, re.I,
         )
         if not match:
