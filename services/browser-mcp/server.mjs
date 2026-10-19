@@ -141,6 +141,7 @@ async function sessionState(sessionId) {
     context.setDefaultNavigationTimeout(25_000);
     const page = await context.newPage();
     const state = {
+      sessionId,
       browser,
       context,
       page,
@@ -228,7 +229,7 @@ async function executeCode(state, code, signal) {
     return {
       ok: true,
       provider: "selfhosted-playwright",
-      session_id: null,
+      session_id: state.sessionId,
       page: { url: current.url(), title: await current.title() },
       ...(value === undefined ? {} : { value: jsonSafe(value) }),
       ...(logs.length ? { logs } : {}),
