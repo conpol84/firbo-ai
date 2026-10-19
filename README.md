@@ -9,7 +9,7 @@ computer/app connectors, **OpenJarvis**, and **OmniRoute** in one developer-faci
 > Production infrastructure, private user data, secrets, and customer configuration are
 > intentionally excluded.
 
-**Production source of truth:** [One FIRBO Master Plan](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_MASTER_PLAN_CURRENT.md) and [live checkpoint #163](https://github.com/conpol84/Firbo-production/issues/163). This repo supplies runtime/tools only; do not create a second CEO, website, tasks or memory.
+**Production source of truth:** [FIRBO LOCKED PRODUCT SCOPE V1](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_LOCKED_PRODUCTION_PLAN_V1.md), then [Current Status Master Plan](https://github.com/conpol84/Firbo-production/blob/main/docs/FIRBO_MASTER_PLAN_CURRENT.md) and [live checkpoint #163](https://github.com/conpol84/Firbo-production/issues/163). This repo supplies runtime/tools only; do not create a second CEO, website, tasks or memory.
 
 ## Clone everything
 
