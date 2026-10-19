@@ -1,28 +1,31 @@
-"""FIRBO browser-only execution route for the existing OpenJarvis server.
+"""Restricted FIRBO cloud-browser routes for the existing OpenJarvis server.
 
-This module is installed beside OpenJarvis and registered on the existing API router.
-It does not create a second service. Every request builds a short-lived ReAct agent
-whose tool set is restricted to the exact-session FIRBO browser MCP tool.
+Installed into the existing `jarvis serve` process. No second server is created.
+The long-lived MCP client owned by OpenJarvis keeps Stagehand state alive across
+pause/resume calls for the same Browserbase session.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import re
-import uuid
+import subprocess
 from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from openjarvis.agents.native_react import NativeReActAgent
-from openjarvis.mcp.loader import load_mcp_tools_from_config
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
 MAX_BODY = 16 * 1024
 MAX_GOAL = 6000
 MAX_TURNS = 10
-BROWSER_TOOL = "browser_session_execute"
+EXECUTE_TOOL = "browser_session_execute"
+CLOSE_TOOL = "browser_session_close"
+SESSION_CREATOR = "/usr/local/sbin/firbo-browser-session-create"
 
 
 def _json(status: int, body: dict[str, Any]) -> JSONResponse:
@@ -37,12 +40,24 @@ async def _body(request: Request) -> dict[str, Any]:
         if size > MAX_BODY:
             raise ValueError("request_too_large")
         chunks.append(chunk)
-    import json
-
     value = json.loads(b"".join(chunks))
     if not isinstance(value, dict):
         raise ValueError("bad_request")
     return value
+
+
+def _tool_name(tool: Any) -> str:
+    return str(getattr(getattr(tool, "spec", None), "name", "") or "")
+
+
+def _browser_tools(app) -> dict[str, Any]:
+    allowed = {EXECUTE_TOOL, CLOSE_TOOL}
+    found: dict[str, Any] = {}
+    for tool in list(getattr(app.state, "mcp_tools", []) or []):
+        name = _tool_name(tool)
+        if name in allowed and name not in found:
+            found[name] = tool
+    return found
 
 
 def _tool_result(result: Any) -> dict[str, Any]:
@@ -53,8 +68,36 @@ def _tool_result(result: Any) -> dict[str, Any]:
     }
 
 
+def _create_session_sync() -> str:
+    completed = subprocess.run(
+        ["sudo", "-n", SESSION_CREATOR],
+        capture_output=True,
+        text=True,
+        timeout=35,
+        check=False,
+        env={},
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("browser_session_create_failed")
+    try:
+        value = json.loads(completed.stdout.strip())
+    except Exception as exc:
+        raise RuntimeError("browser_session_create_bad_response") from exc
+    session_id = str(value.get("session_id", ""))
+    if value.get("contract") != "firbo-browser-session/v1" or not UUID_RE.fullmatch(session_id):
+        raise RuntimeError("browser_session_create_bad_response")
+    return session_id
+
+
+def _close_session_tool(tool: Any, session_id: str) -> None:
+    try:
+        tool.execute(session_id=session_id)
+    except Exception:
+        pass
+
+
 def install_firbo_browser_route(router) -> None:
-    """Register /v1/firbo/browser on the same authenticated OpenJarvis app."""
+    """Register the authenticated FIRBO browser route on the existing API router."""
 
     @router.post("/v1/firbo/browser", include_in_schema=False)
     async def firbo_browser(request: Request):
@@ -76,6 +119,7 @@ def install_firbo_browser_route(router) -> None:
         except Exception:
             return _json(400, {"error": "bad_request"})
 
+        action = str(body.get("action", "run"))
         request_id = str(body.get("request_id", ""))
         organization_id = str(body.get("organization_id", ""))
         task_id = str(body.get("task_id", ""))
@@ -83,37 +127,65 @@ def install_firbo_browser_route(router) -> None:
         goal = str(body.get("goal", "")).strip()
 
         if (
-            not UUID_RE.fullmatch(request_id)
+            action not in {"start", "run", "close"}
+            or not UUID_RE.fullmatch(request_id)
             or not UUID_RE.fullmatch(organization_id)
             or not UUID_RE.fullmatch(task_id)
-            or not UUID_RE.fullmatch(session_id)
-            or not goal
-            or len(goal) > MAX_GOAL
         ):
             return _json(400, {"error": "bad_request"})
 
-        config = getattr(request.app.state, "config", None)
+        if action == "start":
+            try:
+                session_id = await asyncio.to_thread(_create_session_sync)
+            except Exception:
+                return _json(503, {"error": "browser_session_create_failed"})
+            return _json(
+                200,
+                {
+                    "contract": "firbo-browser-session/v1",
+                    "request_id": request_id,
+                    "organization_id": organization_id,
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "status": "READY",
+                },
+            )
+
+        if not UUID_RE.fullmatch(session_id):
+            return _json(400, {"error": "bad_request"})
+
+        browser_tools = _browser_tools(request.app)
+        execute_tool = browser_tools.get(EXECUTE_TOOL)
+        close_tool = browser_tools.get(CLOSE_TOOL)
+
+        if action == "close":
+            if close_tool is None:
+                return _json(503, {"error": "browser_tool_unavailable"})
+            await asyncio.to_thread(_close_session_tool, close_tool, session_id)
+            return _json(
+                200,
+                {
+                    "contract": "firbo-browser-close/v1",
+                    "request_id": request_id,
+                    "organization_id": organization_id,
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "status": "CLOSED",
+                },
+            )
+
+        if not goal or len(goal) > MAX_GOAL:
+            return _json(400, {"error": "bad_request"})
+        if execute_tool is None:
+            return _json(503, {"error": "browser_tool_unavailable"})
+
         engine = getattr(request.app.state, "engine", None)
         model = str(getattr(request.app.state, "model", "") or "")
-        if config is None or engine is None or not model:
+        if engine is None or not model:
             return _json(503, {"error": "browser_executor_unavailable"})
 
-        mcp_cfg = getattr(getattr(config, "tools", None), "mcp", None)
-        if mcp_cfg is None:
-            return _json(503, {"error": "browser_executor_unavailable"})
-
-        tools: list[Any] = []
-        clients: list[Any] = []
-        try:
-            tools, clients = load_mcp_tools_from_config(
-                mcp_cfg, allowed_names={BROWSER_TOOL}
-            )
-            tools = [tool for tool in tools if getattr(getattr(tool, "spec", None), "name", "") == BROWSER_TOOL]
-            if len(tools) != 1:
-                return _json(503, {"error": "browser_tool_unavailable"})
-
-            prompt = f"""You are FIRBO's restricted cloud-browser executor.
-You have exactly one tool: {BROWSER_TOOL}.
+        prompt = f"""You are FIRBO's restricted cloud-browser executor.
+You have exactly one tool: {EXECUTE_TOOL}.
 The only allowed Browserbase session is: {session_id}
 The FIRBO task id is: {task_id}
 
@@ -132,10 +204,11 @@ Rules:
 - Verify browser state before claiming completion.
 - Keep the final answer concise and factual.
 """
+        try:
             agent = NativeReActAgent(
                 engine,
                 model,
-                tools=tools,
+                tools=[execute_tool],
                 bus=getattr(request.app.state, "bus", None),
                 max_turns=MAX_TURNS,
                 temperature=0.1,
@@ -143,14 +216,19 @@ Rules:
                 interactive=False,
                 agent_id="firbo_browser",
             )
-            # MCP transports must live for the entire agent run.
-            agent._mcp_clients = clients
-            result = agent.run(prompt)
+            result = await asyncio.to_thread(agent.run, prompt)
             evidence = [_tool_result(item) for item in result.tool_results]
-            browser_calls = [item for item in evidence if item["name"] == BROWSER_TOOL]
+            browser_calls = [item for item in evidence if item["name"] == EXECUTE_TOOL]
             verified = any(item["success"] for item in browser_calls)
             reply = str(result.content or "")[:12000]
             needs_approval = reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL:")
+            status = "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED")
+
+            # A paused task keeps its persistent Stagehand resource for resume.
+            # Terminal tasks disconnect the MCP handle; Browserbase release is
+            # still owned by the Supabase control plane.
+            if status != "PAUSED" and close_tool is not None:
+                await asyncio.to_thread(_close_session_tool, close_tool, session_id)
 
             return _json(
                 200,
@@ -160,7 +238,7 @@ Rules:
                     "organization_id": organization_id,
                     "task_id": task_id,
                     "session_id": session_id,
-                    "status": "PAUSED" if needs_approval else ("COMPLETED" if verified else "FAILED"),
+                    "status": status,
                     "result": reply,
                     "execution_verified": verified,
                     "tool_count": len(browser_calls),
@@ -169,10 +247,6 @@ Rules:
                 },
             )
         except Exception:
+            if close_tool is not None:
+                await asyncio.to_thread(_close_session_tool, close_tool, session_id)
             return _json(503, {"error": "browser_execution_failed"})
-        finally:
-            for client in clients:
-                try:
-                    client.close()
-                except Exception:
-                    pass
