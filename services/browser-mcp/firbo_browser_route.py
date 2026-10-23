@@ -208,7 +208,7 @@ def _youtube_play_goal(goal: str) -> dict[str, str] | None:
     tail = re.search(r"\band\s+(?:play|watch)\s+(.+)$", search.group(1), re.I)
     if tail:
         track = tail.group(1).strip(" .,")
-        if track and not re.fullmatch(r"(?:the|a|first)\s+video", track, re.I):
+        if track and not re.fullmatch(r"(?:(?:the|a)\s+)?(?:first\s+)?video", track, re.I):
             query = (query + " " + track).strip()
     if not query or len(query) > 150 or not _latin_title(query):
         return None
