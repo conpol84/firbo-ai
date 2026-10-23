@@ -45,6 +45,14 @@ class TestYoutubeGoal(unittest.TestCase):
                                  if "MAZONAKIS" in text else
                                  "https://www.youtube.com/results?search_query=Mazonakis+Ores+Mikres")
 
+    def test_find_artist_and_play_song(self):
+        command = "open youtube find mazonakis and play ores mikres"
+        result = plan(command)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["query"].lower(), "mazonakis ores mikres")
+        self.assertEqual(result["search_url"],
+                         "https://www.youtube.com/results?search_query=mazonakis+ores+mikres")
+
     def test_no_play_request_no_playback(self):
         for text in [
             "OPEN CLOUD BROWSER NOW. GO TO YOUTUBE AND SEARCH MAZONAKIS ORES MIKRES.",
