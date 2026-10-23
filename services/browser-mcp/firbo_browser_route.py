@@ -191,7 +191,7 @@ def _youtube_play_goal(goal: str) -> dict[str, str] | None:
     if not site:
         return None
     remainder = cleaned[site.end():]
-    search = re.search(r"\bsearch(?:\s+(?:on|in)\s+youtube|\s+youtube)?\s+(?:for\s+)?(.+)", remainder, re.I)
+    search = re.search(r"\b(?:search(?:\s+(?:on|in)\s+youtube|\s+youtube)?|find|look\s+up)\s+(?:for\s+)?(.+)", remainder, re.I)
     playback = re.search(
         r"\b(?:play|watch|start\s+playing|open\s+(?:the|a|first)\s+video|"
         r"click\s+(?:the|a|first)\s+video|select\s+(?:the|a|first)\s+video)\b",
@@ -204,6 +204,12 @@ def _youtube_play_goal(goal: str) -> dict[str, str] | None:
         r"|(?i:\s+(?:play|watch|open|click|select)\s+(?:the|a|first)\s+video\b)"
         r"|[.!?\n]", search.group(1), maxsplit=1,
     )[0].strip(" .,\"'")
+    # Carry track title after "and play" into the YouTube search.
+    tail = re.search(r"\band\s+(?:play|watch)\s+(.+)$", search.group(1), re.I)
+    if tail:
+        track = tail.group(1).strip(" .,")
+        if track and not re.fullmatch(r"(?:the|a|first)\s+video", track, re.I):
+            query = (query + " " + track).strip()
     if not query or len(query) > 150 or not _latin_title(query):
         return None
     return {"query": query, "search_url": "https://www.youtube.com/results?search_query=" + quote_plus(query)}
