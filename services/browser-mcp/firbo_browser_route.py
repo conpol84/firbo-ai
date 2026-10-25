@@ -13,6 +13,7 @@ import ipaddress
 import json
 import re
 import subprocess
+import time
 import unicodedata
 from typing import Any
 from urllib.parse import quote_plus, urlsplit, parse_qs
@@ -158,11 +159,74 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         r"(?:is|equals)\s+[\"“]?([^\"”\n.]+)",
         remaining, re.I,
     )
+    # Navigation is only the first step of an open-ended request. A blacklist
+    # of action verbs misses synonyms, Greek, and unknown follow-up operations.
+    # Complete early ONLY for a fully recognized navigation/title/search tail.
+    tail = remaining.strip(" .,;")
+    title_only = re.fullmatch(
+        r"(?:and\s+)?(?:verify|check)\s+(?:that\s+)?(?:the\s+)?page\s+title\s+"
+        r"(?:is|equals)\s+[\"“]?[^\"”\n.]+[\"”]?"
+        r"(?:\.\s*Finish only after browser tool evidence confirms it\.?)?",
+        tail, re.I,
+    ) if expected else None
+    known_tail = not tail or bool(title_only)
+    if search:
+        simple_search = re.fullmatch(
+            r"(?:in\s+(?:the\s+)?cloud\s+browser\s*)?"
+            r"(?:(?:and\s+)?search\s+(?:youtube\s+)?for\s+(.+))?",
+            tail, re.I,
+        )
+        term = simple_search.group(1) if simple_search else None
+        known_tail = bool(simple_search) and not (term and re.search(
+            r"\b(?:and|then|και|kai)\b|[;\n]", term, re.I,
+        ))
     return {
         "url": url,
         "hostname": hostname,
         "expected_title": expected.group(1).strip() if expected else None,
-        "complete_on_navigation": not search_seed and not needs_more,
+        "complete_on_navigation": not search_seed and not needs_more and known_tail,
+    }
+
+
+def _browser_execution_diagnostics(
+    mode: str, configured_model: str, elapsed_ms: int, calls: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Bounded operator evidence; never persist tool text, URLs, or credentials.
+
+    The server's configured model is a route label, not proof of the provider's
+    served model. Direct navigation/search/playback does not invoke an LLM.
+    """
+    attempted = mode == "react"
+    label = configured_model if (
+        attempted and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}", configured_model)
+        and not re.search(r"(?i)(?:https?://|bearer|sk-|AIza)", configured_model)
+    ) else None
+    failures = []
+    for index, call in enumerate(calls[:32]):
+        try:
+            payload = json.loads(str(call.get("output") or ""))
+        except (TypeError, ValueError):
+            payload = None
+        if call.get("success") is True and isinstance(payload, dict) and payload.get("ok") is True:
+            continue
+        error = payload.get("error") if isinstance(payload, dict) else None
+        error = error if isinstance(error, dict) else {}
+        name = error.get("name")
+        code = {
+            "TimeoutError": "timeout", "SyntaxError": "syntax_error",
+            "ReferenceError": "reference_error", "TypeError": "type_error",
+        }.get(name if isinstance(name, str) else "")
+        if not code:
+            code = "aborted" if error.get("kind") == "aborted" else (
+                "malformed_receipt" if call.get("success") is True and not isinstance(payload, dict)
+                else "tool_failed"
+            )
+        failures.append({"step": index + 1, "code": code})
+    return {
+        "version": 1, "mode": mode, "model_attempted": attempted,
+        "configured_model": label, "reported_model": None,
+        "elapsed_ms": max(0, min(int(elapsed_ms), 600000)),
+        "tool_failures": failures,
     }
 
 
@@ -648,19 +712,27 @@ def install_firbo_browser_route(router) -> None:
 
         engine = getattr(request.app.state, "engine", None)
         model = str(getattr(request.app.state, "model", "") or "")
-        if engine is None or not model:
-            return _json(503, {"error": "browser_executor_unavailable"})
+        started = time.monotonic()
+        mode = "navigation"
+
+        def execution_response(status_code: int, payload: dict[str, Any]):
+            payload["diagnostics"] = _browser_execution_diagnostics(
+                mode, model, round((time.monotonic() - started) * 1000),
+                payload.get("tools", []),
+            )
+            return _json(status_code, payload)
 
         # User explicitly asked to play/watch a YouTube search result. A
         # successful search by itself must NEVER count as video playback.
         video_plan = _youtube_play_goal(goal)
         if video_plan:
+            mode = "youtube"
             try:
                 playback = await asyncio.to_thread(
                     _youtube_verified_result, execute_tool, session_id, video_plan
                 )
             except Exception:
-                return _json(503, {"error":"youtube_browser_execution_failed"})
+                return execution_response(503, {"error":"youtube_browser_execution_failed"})
             tools = playback["tools"]
             successful = bool(playback["ok"])
             watch_url = playback.get("video_url")
@@ -671,7 +743,7 @@ def install_firbo_browser_route(router) -> None:
                 f'YouTube playback could not be verified ({playback["error"]}). '
                 + (f'Video page: {watch_url}. Use the FIRBO player to hear it.' if watch_url else 'No verified video page.')
             )
-            return _json(200, {
+            return execution_response(200, {
                 "contract": "firbo-browser-execution/v1",
                 "request_id": request_id, "organization_id": organization_id,
                 "task_id": task_id, "session_id": session_id,
@@ -719,7 +791,7 @@ def install_firbo_browser_route(router) -> None:
                 ).casefold()
 
             if not verified:
-                return _json(200, {
+                return execution_response(200, {
                     "contract": "firbo-browser-execution/v1",
                     "request_id": request_id,
                     "organization_id": organization_id,
@@ -748,7 +820,7 @@ def install_firbo_browser_route(router) -> None:
                     # a side effect. The agent can still inspect through MCP.
                     aria_hint = ""
             if direct["complete_on_navigation"]:
-                return _json(200, {
+                return execution_response(200, {
                     "contract": "firbo-browser-execution/v1",
                     "request_id": request_id,
                     "organization_id": organization_id,
@@ -763,6 +835,9 @@ def install_firbo_browser_route(router) -> None:
                     "tools": direct_evidence,
                 })
 
+        if engine is None or not model:
+            return execution_response(503, {"error": "browser_executor_unavailable"})
+        mode = "react"
         prompt = f"""You are FIRBO's restricted cloud-browser executor.
 You have exactly one tool: {EXECUTE_TOOL}.
 The only allowed FIRBO self-hosted browser session is: {session_id}
@@ -830,7 +905,7 @@ Rules:
             # task must remain resumable, and a terminal task stays alive just
             # long enough for the control plane to capture its final Live View
             # frame before issuing the explicit close action.
-            return _json(
+            return execution_response(
                 200,
                 {
                     "contract": "firbo-browser-execution/v1",
@@ -857,4 +932,5 @@ Rules:
         except Exception:
             if close_tool is not None:
                 await asyncio.to_thread(_close_session_tool, close_tool, session_id)
-            return _json(503, {"error": "browser_execution_failed"})
+            return execution_response(503, {"error": "browser_execution_failed"})
+
