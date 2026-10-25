@@ -66,6 +66,40 @@ class AcceptanceRunnerTests(unittest.TestCase):
     def test_failed_close_cannot_report_acceptance_pass(self):
         self.assertEqual(self.exercise(close_http=503)[0],1)
 
+    def test_tool_shapes_distinguish_missing_and_wrong_named_evidence(self):
+        def report(value):
+            return runner.tool_report({"success":True,"output":json.dumps(value)},1)
+        missing = report({"ok":True,"page":{"title":"Private title"}})
+        self.assertFalse(missing["value_present"])
+        wrong = report({"ok":True,"value":{"firstParagraph":"Private paragraph"}})
+        self.assertEqual(wrong["fields"],{"firstParagraph":{"type":"str","length":17}})
+        good = report({"ok":True,"value":{"text":"Extracted paragraph", "results":[{}]}})
+        self.assertEqual(good["fields"]["results"]["length"],1)
+        self.assertNotIn("Private",json.dumps([missing,wrong,good]))
+
+    def test_errors_emit_only_allowlisted_classes_and_counts(self):
+        private = "PRIVATE_URL_TOKEN_AND_PAGE_CONTENT"
+        payload = {"ok":False,"error":{"name":"TimeoutError","kind":"runtime","message":private},
+                   "page":{"url":private},"value":{private:private,"text":private}}
+        report = runner.tool_report({"success":False,"output":json.dumps(payload)},2)
+        self.assertEqual(report["error_name"],"TimeoutError")
+        self.assertEqual(report["error_kind"],"runtime")
+        self.assertEqual(report["other_field_count"],1)
+        self.assertNotIn(private,json.dumps(report))
+        payload["error"] = {"name":private,"kind":private,"message":private}
+        report = runner.tool_report({"output":json.dumps(payload)},2)
+        self.assertEqual(report["error_name"],"unknown")
+        self.assertEqual(report["error_kind"],"unknown")
+        self.assertNotIn(private,json.dumps(report))
+
+    def test_truncation_and_executor_denial_are_distinguishable(self):
+        truncated = runner.tool_report({"success":True,"output":"{" + "x"*11999},1)
+        self.assertTrue(truncated["at_output_limit"])
+        self.assertFalse(truncated["json_object"])
+        denial = runner.tool_report({"success":False,"output":"[Governance] PRIVATE"},2)
+        self.assertEqual(denial["failure"],"governance_denied")
+        self.assertNotIn("PRIVATE",json.dumps(denial))
+
 
 if __name__ == "__main__":
     unittest.main()
