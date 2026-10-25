@@ -93,7 +93,7 @@ class BrowserRouteTests(unittest.TestCase):
         Agent.invocations = []
         Agent.results = []
         Agent.configurations = []
-        scope["NativeReActAgent"] = Agent
+        scope["OrchestratorAgent"] = Agent
         router = Router()
         scope["install_firbo_browser_route"](router)
         self.handler = router.handler
@@ -130,6 +130,29 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertEqual(Agent.configurations[0]["temperature"], 1)
         self.assertEqual(Agent.invocations[0][0], "test/quality")
         self.assertEqual(result["status"], "FAILED")  # No content-read evidence in this fixture.
+        self.assertEqual(Agent.configurations[0]["mode"], "function_calling")
+        self.assertFalse(Agent.configurations[0]["parallel_tools"])
+        self.assertEqual(result["diagnostics"]["agent_protocol"], "function_calling")
+        self.assertNotIn("Action Input:", Agent.invocations[0][1])
+
+    def test_tool_guard_rejects_wrong_session_and_closed_session(self):
+        request = Request("Open https://example.com and read the first paragraph", Tool())
+        asyncio.run(self.handler(request))
+        guard = Agent.configurations[0]["before_tool_call"]
+        args = {"session_id":request.body["session_id"], "code":"return await page.title();"}
+        self.assertFalse(guard("shell_exec", args))
+        self.assertFalse(guard("browser_session_execute", dict(args, session_id="wrong")))
+        self.assertFalse(guard("browser_session_execute", dict(args, extra="unexpected")))
+        self.assertTrue(guard("browser_session_execute", args))
+        scope["_mark_browser_session_closed"](request.app, request.body["session_id"])
+        self.assertFalse(guard("browser_session_execute", args))
+
+    def test_tool_guard_has_a_shared_call_budget(self):
+        self.invoke("Open https://example.com and read the first paragraph")
+        guard = Agent.configurations[0]["before_tool_call"]
+        args = {"session_id":"11111111-1111-4111-8111-111111111111", "code":"return await page.title();"}
+        self.assertTrue(all(guard("browser_session_execute", args) for _ in range(10)))
+        self.assertFalse(guard("browser_session_execute", args))
 
     def test_title_only_read_returns_observed_title_without_model(self):
         status, result, tool = self.invoke("Open https://example.com and read the page title", engine=False)
@@ -155,7 +178,7 @@ class BrowserRouteTests(unittest.TestCase):
                          "value":{"text":"A sufficiently long paragraph extracted from the actual fixture DOM."}}
                 tool_result=types.SimpleNamespace(tool_name="browser_session_execute",success=True,content=json.dumps(payload))
                 return types.SimpleNamespace(content="Read the paragraph",tool_results=[tool_result],turns=2)
-        scope["NativeReActAgent"]=RecoveringAgent
+        scope["OrchestratorAgent"]=RecoveringAgent
         status,result,_=self.invoke("Open https://example.com and read the first paragraph")
         self.assertEqual(status,200)
         self.assertEqual(result["status"],"COMPLETED")
@@ -169,7 +192,7 @@ class BrowserRouteTests(unittest.TestCase):
             def run(self,prompt):
                 self.invocations.append((self.model,prompt))
                 return types.SimpleNamespace(content="I read everything",tool_results=[],turns=1)
-        scope["NativeReActAgent"]=NoEvidenceAgent
+        scope["OrchestratorAgent"]=NoEvidenceAgent
         _,result,_=self.invoke("Open https://example.com and read the first paragraph")
         self.assertEqual(result["status"],"FAILED")
         self.assertEqual(result["missing_steps"],["read"])
@@ -185,7 +208,7 @@ class BrowserRouteTests(unittest.TestCase):
                     def run(self,prompt):
                         self.invocations.append((self.model,prompt))
                         return types.SimpleNamespace(content=reply,tool_results=[],turns=min(turns,self.kwargs["max_turns"]))
-                scope["NativeReActAgent"]=BoundedAgent
+                scope["OrchestratorAgent"]=BoundedAgent
                 _,result,_=self.invoke("Open https://example.com and read the first paragraph")
                 self.assertEqual(len(Agent.invocations),expected_calls)
                 if expected_calls==2:
@@ -213,7 +236,7 @@ class BrowserRouteTests(unittest.TestCase):
                 if len(self.invocations)>1:
                     raise RuntimeError("PRIVATE PROVIDER RESPONSE")
                 return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
-        scope["NativeReActAgent"]=FailingRecoveryAgent
+        scope["OrchestratorAgent"]=FailingRecoveryAgent
         status,result,_=self.invoke("Open https://example.com and read the first paragraph")
         self.assertEqual(status,200)
         self.assertEqual(result["status"],"FAILED")
@@ -225,7 +248,7 @@ class BrowserRouteTests(unittest.TestCase):
             def run(self,prompt):
                 self.invocations.append((self.model,prompt))
                 return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
-        scope["NativeReActAgent"]=SlowAgent
+        scope["OrchestratorAgent"]=SlowAgent
         old_time=scope["time"]
         clock=iter([0,55,56])
         scope["time"]=types.SimpleNamespace(monotonic=lambda:next(clock))
@@ -241,7 +264,7 @@ class BrowserRouteTests(unittest.TestCase):
                 self.invocations.append((self.model,prompt))
                 scope["_mark_browser_session_closed"](request.app,request.body["session_id"])
                 return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
-        scope["NativeReActAgent"]=StoppedAgent
+        scope["OrchestratorAgent"]=StoppedAgent
         status,result=asyncio.run(self.handler(request))
         self.assertEqual(status,200)
         self.assertFalse(result["execution_verified"])
