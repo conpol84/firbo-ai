@@ -124,6 +124,18 @@ class BrowserIntentTests(unittest.TestCase):
                 output = plan("Open https://example.com " + suffix)
                 self.assertFalse(output["complete_on_navigation"])
 
+    def test_observed_title_is_a_complete_bounded_read(self):
+        for suffix in ["and read the page title", "and show me the page title", "and tell me the page title"]:
+            with self.subTest(suffix=suffix):
+                self.assertTrue(plan("Open https://www.wikipedia.org " + suffix)["complete_on_navigation"])
+        output = plan("Navigate to https://example.com and verify the page title is Example Domain. Finish after verifying the title.")
+        self.assertTrue(output["complete_on_navigation"])
+        self.assertEqual(output["expected_title"], "Example Domain")
+
+    def test_title_read_does_not_hide_other_requested_steps(self):
+        for suffix in ["and read the page title and the first paragraph", "and show me the page title then click a link", "and read the page title; delete my account"]:
+            self.assertFalse(plan("Open https://example.com " + suffix)["complete_on_navigation"])
+
 
 if __name__ == "__main__":
     unittest.main()

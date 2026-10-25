@@ -62,9 +62,14 @@ class Tool:
 class Agent:
     invocations = []
     results = []
+    configurations = []
     def __init__(self, engine, model, **kwargs):
         self.kwargs = kwargs
         self.model = model
+        self.configurations.append(kwargs)
+        # Reproduce the live gateway's supported-temperature contract.
+        if kwargs.get("temperature") != 1:
+            raise ValueError("Only the default (1) value is supported")
     def run(self, prompt):
         self.invocations.append((self.model, prompt))
         return types.SimpleNamespace(content="Done", tool_results=self.results)
@@ -87,6 +92,7 @@ class BrowserRouteTests(unittest.TestCase):
     def setUp(self):
         Agent.invocations = []
         Agent.results = []
+        Agent.configurations = []
         scope["NativeReActAgent"] = Agent
         router = Router()
         scope["install_firbo_browser_route"](router)
@@ -117,6 +123,27 @@ class BrowserRouteTests(unittest.TestCase):
             self.assertEqual(result["diagnostics"]["configured_model"],"test/quality")
             self.assertIsNone(result["diagnostics"]["reported_model"])
         self.assertEqual(len(Agent.invocations),2)
+
+    def test_agent_uses_supported_temperature_without_switching_model(self):
+        status, result, _ = self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(status, 200)
+        self.assertEqual(Agent.configurations[0]["temperature"], 1)
+        self.assertEqual(Agent.invocations[0][0], "test/quality")
+        self.assertEqual(result["status"], "FAILED")  # No content-read evidence in this fixture.
+
+    def test_title_only_read_returns_observed_title_without_model(self):
+        status, result, tool = self.invoke("Open https://example.com and read the page title", engine=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertIn("Example Domain", result["result"])
+        self.assertEqual(len(tool.calls), 1)
+        self.assertEqual(Agent.invocations, [])
+
+    def test_wrong_expected_title_cannot_complete(self):
+        status, result, _ = self.invoke("Open https://example.com and verify the page title is Wrong. Finish after verifying the title.")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(Agent.invocations, [])
 
     def test_tool_failure_retains_a_safe_cause_without_secret_text(self):
         status, result, _ = self.invoke("Open https://example.com", tool=Tool("TimeoutError"))
