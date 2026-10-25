@@ -3,14 +3,18 @@
 # MCP reconfiguration, Docker image, Git checkout or Supabase mutations.
 set -Eeuo pipefail
 umask 077
-PINNED_COMMIT=2d8d350f0e1e8734495b6d3bbc9fec44fdb290e7
+PINNED_COMMIT="${2:-}"
+EXPECTED_BASE_SHA256=de284eb459227a35c46cf1642003c23635ae190e2b0f508f9b81fc8412b53ce2
 VENV_PY=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
 if [[ $# -gt 0 ]]; then MODE="$1"; fi
 die(){ echo "FIRBO_RELEASE_BLOCKED: $*" >&2; exit 1; }
 [[ "$MODE" == --check || "$MODE" == --apply ]] || die "expected --check or --apply"
+[[ "$PINNED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "supply the reviewed 40-character commit as the second argument"
 [[ $(id -u) -eq 0 ]] || die "run as root"
-for command in git python3 curl tar sudo; do command -v "$command" >/dev/null || die "missing $command"; done
+for command in git python3 curl tar sudo flock sha256sum systemctl; do command -v "$command" >/dev/null || die "missing $command"; done
+exec 9>/run/lock/firbo-browser-route-release.lock
+flock -n 9 || die "another browser release holds the deployment lock"
 [[ -x "$VENV_PY" ]] || die "OpenJarvis venv missing"
 ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || die "cd to firbo-ai checkout first"
 REMOTE="$(git -C "$ROOT" config --get remote.origin.url || true)"
@@ -27,7 +31,9 @@ git -C "$ROOT" archive "$PINNED_COMMIT" \
  services/browser-mcp/firbo_browser_route.py \
  tests/test_browser_direct_intent.py \
  tests/test_generic_browser_goal_acceptance.py \
- tests/test_youtube_playback_acceptance.py | tar -xf - -C "$TMP"
+ tests/test_youtube_playback_acceptance.py \
+ tests/test_browser_aria_observation.py \
+ tests/test_browser_route_execution.py | tar -xf - -C "$TMP"
 SOURCE="$TMP/services/browser-mcp/firbo_browser_route.py"
 grep -q '^def _browser_goal_acceptance(' "$SOURCE" || die "generic acceptance missing"
 grep -q '^def _youtube_verified_result(' "$SOURCE" || die "YouTube verifier missing"
@@ -38,6 +44,8 @@ python3 -m py_compile "$SOURCE"
  python3 -m unittest discover -s tests -p test_browser_direct_intent.py -q
  python3 -m unittest discover -s tests -p test_generic_browser_goal_acceptance.py -q
  python3 -m unittest discover -s tests -p test_youtube_playback_acceptance.py -q
+ python3 -m unittest discover -s tests -p test_browser_aria_observation.py -q
+ python3 -m unittest discover -s tests -p test_browser_route_execution.py -q
 ) || die "route tests failed"
 echo FIRBO_BROWSER_SOURCE_TESTS_PASS
 SERVER_DIR="$(sudo -u jarvis "$VENV_PY" - <<'PY'
@@ -70,6 +78,8 @@ if [[ "$CURRENT_SHA" == "$CANDIDATE_SHA" ]]; then
  echo FIRBO_BROWSER_ROUTE_ALREADY_CURRENT
  exit 0
 fi
+[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" ]] \
+ || die "installed route differs from the reviewed baseline; preserve and reconcile local changes first"
 if [[ "$MODE" == --check ]]; then
  echo FIRBO_BROWSER_ROUTE_UPGRADE_NEEDED
  echo "Dry-run complete; --apply replaces ONLY the browser route and restarts openjarvis.service."
@@ -79,6 +89,8 @@ BACKUP_DIR=/var/backups/firbo-browser-route
 install -d -o root -g root -m 0700 "$BACKUP_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="$BACKUP_DIR/firbo_browser_route.$STAMP.$CURRENT_SHA.py"
+[[ "$(sha256sum "$ROUTE" | cut -d' ' -f1)" == "$CURRENT_SHA" ]] \
+ || die "installed route changed during preflight"
 cp -p -- "$ROUTE" "$BACKUP"
 echo "FIRBO_BROWSER_BACKUP=$BACKUP"
 ROLLBACK_NEEDED=1
@@ -117,3 +129,4 @@ ROLLBACK_NEEDED=0
 trap - ERR
 echo "FIRBO_BROWSER_ROUTE_RELEASE_PASS SHA=$PINNED_COMMIT"
 echo "Authenticated browser/playback and exact Stop still require website acceptance."
+

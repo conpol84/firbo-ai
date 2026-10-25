@@ -110,6 +110,21 @@ class BrowserIntentTests(unittest.TestCase):
         self.assertIsNotNone(output)
         self.assertFalse(output["complete_on_navigation"])
 
+    def test_unfinished_steps_do_not_take_navigation_fast_path(self):
+        for suffix in [
+            "and search for FIRBO",
+            "and find the release notes",
+            "and tell me what the page says",
+            "and compare the first two results",
+            "και διάβασε την πρώτη παράγραφο",
+            "kai vres tin proti anakoinosi",
+            "and delete my account",
+        ]:
+            with self.subTest(suffix=suffix):
+                output = plan("Open https://example.com " + suffix)
+                self.assertFalse(output["complete_on_navigation"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
