@@ -9,6 +9,8 @@ EXPECTED_BASE_SHA256=de284eb459227a35c46cf1642003c23635ae190e2b0f508f9b81fc8412b
 EXPECTED_PR29_SHA256=b91640bee02142aaa60f5196f5d2cc93aec0f7f71f86540e507ca9f1645f27a7
 # Owner-installed PR #30, verified by the 2026-10-25 release receipt.
 EXPECTED_PR30_SHA256=73d9c253e55d4885343a63c05bfeb1a7494168b4e54a12449baeb79a65d48c8f
+# Owner-installed PR #31; confirmed by release and diagnostic receipts.
+EXPECTED_PR31_SHA256=6693f080b4faaa170dd922f75c0a9efbb24c84c121806ebaafd2c4b607460c97
 VENV_PY=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
 if [[ $# -gt 0 ]]; then MODE="$1"; fi
@@ -33,11 +35,14 @@ cleanup(){ rm -rf -- "$TMP"; }
 trap cleanup EXIT
 git -C "$ROOT" archive "$PINNED_COMMIT" \
  services/browser-mcp/firbo_browser_route.py \
+ scripts/check-browser-native-contract.py \
+ scripts/accept-browser-search-read.py \
  tests/test_browser_direct_intent.py \
  tests/test_generic_browser_goal_acceptance.py \
  tests/test_youtube_playback_acceptance.py \
  tests/test_browser_aria_observation.py \
- tests/test_browser_route_execution.py | tar -xf - -C "$TMP"
+ tests/test_browser_route_execution.py \
+ tests/test_browser_acceptance_runner.py | tar -xf - -C "$TMP"
 SOURCE="$TMP/services/browser-mcp/firbo_browser_route.py"
 grep -q '^def _browser_goal_acceptance(' "$SOURCE" || die "generic acceptance missing"
 grep -q '^def _youtube_verified_result(' "$SOURCE" || die "YouTube verifier missing"
@@ -50,7 +55,12 @@ python3 -m py_compile "$SOURCE"
  python3 -m unittest discover -s tests -p test_youtube_playback_acceptance.py -q
  python3 -m unittest discover -s tests -p test_browser_aria_observation.py -q
  python3 -m unittest discover -s tests -p test_browser_route_execution.py -q
+ python3 -m unittest discover -s tests -p test_browser_acceptance_runner.py -q
 ) || die "route tests failed"
+# Exercise the real installed framework, not only the dependency-free fixtures.
+"$VENV_PY" "$TMP/scripts/check-browser-native-contract.py" -q \
+ || die "installed OpenJarvis native tool contract failed"
+echo FIRBO_BROWSER_NATIVE_TOOL_CONTRACT_PASS
 echo FIRBO_BROWSER_SOURCE_TESTS_PASS
 SERVER_DIR="$(sudo -u jarvis "$VENV_PY" - <<'PY'
 import pathlib, openjarvis.server
@@ -82,7 +92,7 @@ if [[ "$CURRENT_SHA" == "$CANDIDATE_SHA" ]]; then
  echo FIRBO_BROWSER_ROUTE_ALREADY_CURRENT
  exit 0
 fi
-[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR30_SHA256" ]] \
+[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR30_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR31_SHA256" ]] \
  || die "installed route differs from reviewed baselines; preserve and reconcile local changes first"
 if [[ "$MODE" == --check ]]; then
  echo FIRBO_BROWSER_ROUTE_UPGRADE_NEEDED
