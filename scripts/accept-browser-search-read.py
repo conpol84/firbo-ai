@@ -8,6 +8,52 @@ GOAL = "Open https://www.wikipedia.org and search for Cyprus, open the Cyprus ar
 STEPS = {"navigate", "read", "search", "interact", "play"}
 
 
+def tool_report(tool, index):
+    """Count-only evidence for failures and unexpected MCP return shapes."""
+    tool = tool if isinstance(tool, dict) else {}
+    raw = tool.get("output")
+    raw = raw if isinstance(raw, str) else ""
+    report = {"tool":index, "success":tool.get("success") is True,
+              "output_chars":len(raw), "at_output_limit":len(raw) >= 12000}
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        payload = None
+    report["json_object"] = isinstance(payload, dict)
+    if not isinstance(payload, dict):
+        # Emit only locally defined categories, never the raw exception text.
+        report["failure"] = next((code for marker, code in (
+            ("[Governance]", "governance_denied"),
+            ("Loop guard:", "loop_guard"),
+            ("requires confirmation", "confirmation_required"),
+            ("timed out after", "tool_timeout"),
+            ("MCP tool error:", "mcp_error"),
+            ("Tool execution error:", "executor_error"),
+            ("Security block:", "security_block"),
+        ) if marker in raw), "unclassified")
+        return report
+    report["payload_ok"] = payload.get("ok") is True
+    report["value_present"] = "value" in payload
+    value = payload.get("value")
+    report["value_type"] = type(value).__name__
+    if isinstance(value, str):
+        report["value_chars"] = len(value)
+    if isinstance(value, dict):
+        # Fixed field names only; page-supplied keys and values never printed.
+        report["fields"] = {name:{"type":type(value[name]).__name__,
+            "length":len(value[name]) if isinstance(value[name], (str,list,dict)) else None}
+            for name in ("text","results","items","content","body","paragraph",
+                         "firstParagraph","first_paragraph","data","result") if name in value}
+        report["other_field_count"] = len(value) - len(report["fields"])
+    error = payload.get("error")
+    if isinstance(error, dict):
+        report["error_name"] = error.get("name") if error.get("name") in (
+            "Error","TimeoutError","SyntaxError","ReferenceError","TypeError") else "unknown"
+        report["error_kind"] = error.get("kind") if error.get("kind") in (
+            "runtime","policy","aborted") else "unknown"
+    return report
+
+
 def main():
     session = None
     verified = closed = False
@@ -54,6 +100,10 @@ def main():
                           "missing_steps":missing, "tool_count":len(run.get("tools", []))}))
         diagnostics = run.get("diagnostics") or {}
         print("NATIVE_PROTOCOL", diagnostics.get("agent_protocol") == "function_calling")
+        elapsed = diagnostics.get("elapsed_ms")
+        print("ELAPSED_MS", min(max(elapsed,0),600000) if type(elapsed) is int else None)
+        for index, tool in enumerate(run.get("tools", [])[:32], 1):
+            print(json.dumps(tool_report(tool, index), sort_keys=True))
         for index, item in enumerate(diagnostics.get("model_responses", [])[:10], 1):
             reason = item.get("finish_reason")
             safe = {"turn":index, "finish_reason":reason if reason in (
