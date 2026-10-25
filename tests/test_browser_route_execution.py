@@ -145,6 +145,95 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(Agent.invocations, [])
 
+    def test_unverified_read_gets_one_continuation_with_real_evidence(self):
+        class RecoveringAgent(Agent):
+            def run(self, prompt):
+                self.invocations.append((self.model,prompt))
+                if len(self.invocations)==1:
+                    return types.SimpleNamespace(content="Done",tool_results=[],turns=2)
+                payload={"ok":True,"page":{"url":"https://example.com","title":"Example Domain"},
+                         "value":{"text":"A sufficiently long paragraph extracted from the actual fixture DOM."}}
+                tool_result=types.SimpleNamespace(tool_name="browser_session_execute",success=True,content=json.dumps(payload))
+                return types.SimpleNamespace(content="Read the paragraph",tool_results=[tool_result],turns=2)
+        scope["NativeReActAgent"]=RecoveringAgent
+        status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(status,200)
+        self.assertEqual(result["status"],"COMPLETED")
+        self.assertEqual(result["verified_steps"],["navigate","read"])
+        self.assertEqual(len(Agent.invocations),2)
+        self.assertEqual(Agent.configurations[1]["max_turns"],3)
+        self.assertIn("RUNTIME VERIFICATION FEEDBACK",Agent.invocations[1][1])
+
+    def test_continuation_cannot_complete_from_prose_or_loop_indefinitely(self):
+        class NoEvidenceAgent(Agent):
+            def run(self,prompt):
+                self.invocations.append((self.model,prompt))
+                return types.SimpleNamespace(content="I read everything",tool_results=[],turns=1)
+        scope["NativeReActAgent"]=NoEvidenceAgent
+        _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(result["status"],"FAILED")
+        self.assertEqual(result["missing_steps"],["read"])
+        self.assertEqual(len(Agent.invocations),2)
+
+    def test_continuation_respects_remaining_turns_and_approval(self):
+        for turns,reply,expected_calls in [(8,"Done",2),(10,"Done",1),
+                                         (1,"FIRBO_BROWSER_NEEDS_APPROVAL: login",1),
+                                         (1,"Sign in to confirm you are not a bot",1)]:
+            with self.subTest(turns=turns,reply=reply):
+                self.setUp()
+                class BoundedAgent(Agent):
+                    def run(self,prompt):
+                        self.invocations.append((self.model,prompt))
+                        return types.SimpleNamespace(content=reply,tool_results=[],turns=min(turns,self.kwargs["max_turns"]))
+                scope["NativeReActAgent"]=BoundedAgent
+                _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+                self.assertEqual(len(Agent.invocations),expected_calls)
+                if expected_calls==2:
+                    self.assertEqual(Agent.configurations[1]["max_turns"],2)
+                if reply.startswith("FIRBO_BROWSER_NEEDS_APPROVAL"):
+                    self.assertEqual(result["status"],"PAUSED")
+
+    def test_youtube_sign_in_boundary_pauses_without_a_model_call(self):
+        original=scope["_youtube_verified_result"]
+        self.addCleanup(scope.__setitem__,"_youtube_verified_result",original)
+        scope["_youtube_verified_result"]=lambda *args: {
+            "ok":False,"needs_user_action":True,"error":"youtube_sign_in_required",
+            "tools":[],"video_page_verified":True,"playback_verified":False,
+            "video_url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","video_title":"Test"}
+        _,result,_=self.invoke("Open YouTube and search for Mazonakis Ores Mikres and play the first video")
+        self.assertEqual(result["status"],"PAUSED")
+        self.assertFalse(result["playback_verified"])
+        self.assertIn("sign-in",result["result"])
+        self.assertEqual(Agent.invocations,[])
+
+    def test_recovery_error_preserves_the_incomplete_receipt(self):
+        class FailingRecoveryAgent(Agent):
+            def run(self,prompt):
+                self.invocations.append((self.model,prompt))
+                if len(self.invocations)>1:
+                    raise RuntimeError("PRIVATE PROVIDER RESPONSE")
+                return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
+        scope["NativeReActAgent"]=FailingRecoveryAgent
+        status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(status,200)
+        self.assertEqual(result["status"],"FAILED")
+        self.assertEqual(result["tool_count"],1)
+        self.assertNotIn("PRIVATE",json.dumps(result))
+
+    def test_slow_first_attempt_does_not_start_another_model_run(self):
+        class SlowAgent(Agent):
+            def run(self,prompt):
+                self.invocations.append((self.model,prompt))
+                return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
+        scope["NativeReActAgent"]=SlowAgent
+        old_time=scope["time"]
+        clock=iter([0,55,56])
+        scope["time"]=types.SimpleNamespace(monotonic=lambda:next(clock))
+        self.addCleanup(scope.__setitem__,"time",old_time)
+        _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(result["status"],"FAILED")
+        self.assertEqual(len(Agent.invocations),1)
+
     def test_tool_failure_retains_a_safe_cause_without_secret_text(self):
         status, result, _ = self.invoke("Open https://example.com", tool=Tool("TimeoutError"))
         self.assertEqual(result["status"],"FAILED")

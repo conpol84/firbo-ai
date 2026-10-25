@@ -141,6 +141,22 @@ class TestPlaybackReceipt(unittest.TestCase):
                 self.assertFalse(receipt["playback_verified"])
                 self.assertTrue(receipt["video_page_verified"])
 
+    def test_sign_in_and_consent_receipts_cannot_claim_playback(self):
+        p=plan("Open YouTube and search for MAZONAKIS ORES MIKRES and play the first video")
+        for reason in ["youtube_sign_in_required","youtube_consent_required"]:
+            class BlockedTool(FakeTool):
+                def execute(self,**kwargs):
+                    result=super().execute(**kwargs)
+                    if len(self.calls)==3:
+                        payload=json.loads(result.content)
+                        payload["value"]["blocked_reason"]=reason
+                        result.content=json.dumps(payload)
+                    return result
+            receipt=run(BlockedTool(True),"session",p)
+            self.assertFalse(receipt["playback_verified"])
+            self.assertTrue(receipt["needs_user_action"])
+            self.assertEqual(receipt["error"],reason)
+
     @unittest.skipUnless(shutil.which("node"), "Node is required to execute the generated Playwright program")
     def test_generated_program_waits_for_buffering_and_rejects_ad_progress(self):
         p=plan("Open YouTube and search for MAZONAKIS ORES MIKRES and play the first video")
@@ -150,7 +166,7 @@ class TestPlaybackReceipt(unittest.TestCase):
         # Execute the actual emitted JS with a deterministic page/media clock.
         harness=r'''
 const {code,scenario}=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
-let tick=0,clicks=0;
+let tick=0,clicks=0,consentClicks=0,consentVisible=scenario==='consent';
 const video={
   get paused(){return scenario==='denied'||(scenario==='delayed'&&tick<5);},
   get currentTime(){return scenario==='delayed'?Math.max(0,tick-4)*0.75:tick*0.75;},
@@ -158,18 +174,28 @@ const video={
   play(){return scenario==='denied'?Promise.reject(Object.assign(new Error('PRIVATE'),{name:'NotAllowedError'})):Promise.resolve();}
 };
 global.document={querySelector:s=>s==='video'?video:scenario==='ad'?{}:null};
-const page={goto:async()=>{},locator:()=>({first(){return this;},waitFor:async()=>{},click:async()=>{clicks++;}}),
+const page={goto:async()=>{},
+ getByRole:()=>({count:async()=>consentVisible?1:0,first(){return this;},isVisible:async()=>consentVisible,click:async()=>{consentClicks++;consentVisible=false;}}),
+ locator:()=>({first(){return this;},waitFor:async()=>{},click:async()=>{clicks++;},innerText:async()=>scenario==='signin'?"Sign in to confirm you're not a bot":'Test video'}),
  evaluate:async fn=>fn(),waitForTimeout:async()=>{tick++;},url:()=> 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',title:async()=> 'Test'};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-new AsyncFunction('page',code)(page).then(result=>process.stdout.write(JSON.stringify({result,tick,clicks}))).catch(e=>{console.error(e);process.exit(1);});
+new AsyncFunction('page',code)(page).then(result=>process.stdout.write(JSON.stringify({result,tick,clicks,consentClicks}))).catch(e=>{console.error(e);process.exit(1);});
 '''
-        for scenario in ["delayed","ad","denied"]:
+        for scenario in ["delayed","ad","denied","consent","signin"]:
             with self.subTest(scenario=scenario):
                 proc=subprocess.run([shutil.which("node"),"-e",harness],input=json.dumps({"code":program,"scenario":scenario}),
                                     text=True,capture_output=True,timeout=5,check=True)
                 observed=json.loads(proc.stdout)
                 state=observed["result"]
-                if scenario=="delayed":
+                if scenario=="signin":
+                    self.assertEqual(state["blocked_reason"],"youtube_sign_in_required")
+                    self.assertEqual(observed["clicks"],0)
+                    self.assertEqual(observed["tick"],0)
+                    continue
+                if scenario=="consent":
+                    self.assertEqual(observed["consentClicks"],1)
+                    self.assertGreaterEqual(state["after"]["time"]-state["before"]["time"],0.4)
+                elif scenario=="delayed":
                     self.assertGreater(observed["tick"],3)  # More than the former 2.2-second window.
                     self.assertLess(observed["tick"],12)
                     self.assertFalse(state["after"]["paused"])

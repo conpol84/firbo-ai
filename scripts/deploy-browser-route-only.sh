@@ -7,6 +7,8 @@ PINNED_COMMIT="${2:-}"
 EXPECTED_BASE_SHA256=de284eb459227a35c46cf1642003c23635ae190e2b0f508f9b81fc8412b53ce2
 # Also permit the exact reviewed PR #29 route if that release was installed.
 EXPECTED_PR29_SHA256=b91640bee02142aaa60f5196f5d2cc93aec0f7f71f86540e507ca9f1645f27a7
+# Owner-installed PR #30, verified by the 2026-10-25 release receipt.
+EXPECTED_PR30_SHA256=73d9c253e55d4885343a63c05bfeb1a7494168b4e54a12449baeb79a65d48c8f
 VENV_PY=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
 if [[ $# -gt 0 ]]; then MODE="$1"; fi
@@ -80,7 +82,7 @@ if [[ "$CURRENT_SHA" == "$CANDIDATE_SHA" ]]; then
  echo FIRBO_BROWSER_ROUTE_ALREADY_CURRENT
  exit 0
 fi
-[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" ]] \
+[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR30_SHA256" ]] \
  || die "installed route differs from reviewed baselines; preserve and reconcile local changes first"
 if [[ "$MODE" == --check ]]; then
  echo FIRBO_BROWSER_ROUTE_UPGRADE_NEEDED
