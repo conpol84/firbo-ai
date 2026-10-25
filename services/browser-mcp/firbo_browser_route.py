@@ -166,10 +166,14 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     title_only = re.fullmatch(
         r"(?:and\s+)?(?:verify|check)\s+(?:that\s+)?(?:the\s+)?page\s+title\s+"
         r"(?:is|equals)\s+[\"“]?[^\"”\n.]+[\"”]?"
-        r"(?:\.\s*Finish only after browser tool evidence confirms it\.?)?",
+        r"(?:\.\s*(?:Finish only after browser tool evidence confirms it|Finish after verifying the title)\.?)?",
         tail, re.I,
     ) if expected else None
-    known_tail = not tail or bool(title_only)
+    read_title_only = re.fullmatch(
+        r"(?:and\s+)?(?:read\s+|show\s+(?:me\s+)?|tell\s+me\s+)(?:the\s+)?page\s+title",
+        tail, re.I,
+    )
+    known_tail = not tail or bool(title_only) or bool(read_title_only)
     if search:
         simple_search = re.fullmatch(
             r"(?:in\s+(?:the\s+)?cloud\s+browser\s*)?"
@@ -184,7 +188,7 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         "url": url,
         "hostname": hostname,
         "expected_title": expected.group(1).strip() if expected else None,
-        "complete_on_navigation": not search_seed and not needs_more and known_tail,
+        "complete_on_navigation": not search_seed and (not needs_more or bool(read_title_only)) and known_tail,
     }
 
 
@@ -339,14 +343,43 @@ def _youtube_verified_result(tool: Any, session_id: str, plan: dict[str,str]) ->
     play_code = (
         "await page.goto(" + json.dumps(video_url) + ",{waitUntil:'domcontentloaded',timeout:25000});"
         "await page.locator('video').first().waitFor({state:'attached',timeout:12000});"
-        "try{await page.locator('.ytp-large-play-button').click({timeout:2500});}catch(e){}"
-        "try{await page.evaluate(async()=>{const v=document.querySelector('video');if(v?.paused)await v.play();});}catch(e){}"
-        "const before=await page.evaluate(()=>{const v=document.querySelector('video');"
-        "return {paused:v?.paused!==false,time:Number(v?.currentTime||0)};});"
-        "await page.waitForTimeout(2200);"
-        "const after=await page.evaluate(()=>{const v=document.querySelector('video');"
-        "return {paused:v?.paused!==false,time:Number(v?.currentTime||0)};});"
-        "return {before,after,video_url:page.url(),video_title:await page.title()};"
+        """
+const sample=()=>page.evaluate(()=>{
+  const v=document.querySelector('video');
+  return {paused:v?.paused!==false,time:v?.currentTime??null,
+    ad:!!document.querySelector('.html5-video-player.ad-showing, .html5-video-player.ad-interrupting'),
+    ready_state:v?.readyState??0,ended:v?.ended!==false,media_error:v?.error?.code??null};
+});
+// A real player click supplies user activation. Do not toggle an already
+// playing video, mute it, or change Chromium's autoplay policy.
+for(const selector of ['.ytp-large-play-button','.ytp-play-button']){
+  if(!(await sample()).paused)break;
+  try{await page.locator(selector).first().click({timeout:1500});}catch(e){}
+}
+// play() may remain pending while buffering. Bound the wait and retain only
+// a safe error class, never the raw page/provider message.
+const play_error=await page.evaluate(async()=>{
+  const v=document.querySelector('video');
+  if(!v)return 'video_missing';
+  if(!v.paused)return null;
+  let timer;
+  try{return await Promise.race([
+    v.play().then(()=>null).catch(e=>['NotAllowedError','NotSupportedError','AbortError'].includes(e?.name)?e.name:'play_failed'),
+    new Promise(resolve=>{timer=setTimeout(()=>resolve('play_pending'),1000);})
+  ]);}catch(e){return 'play_failed';}finally{clearTimeout(timer);}
+});
+const playable=s=>s.paused===false&&s.ad===false&&s.ended===false&&
+  s.media_error===null&&s.ready_state>=2&&Number.isFinite(s.time)&&s.time>=0;
+let before=await sample(),after=before;
+// Allow delayed buffering without counting ad progress as the requested video.
+for(let attempt=0;attempt<12;attempt++){
+  await page.waitForTimeout(750);
+  after=await sample();
+  if(playable(before)&&playable(after)&&after.time-before.time>=0.4)break;
+  before=after;
+}
+return {before,after,play_error,video_url:page.url(),video_title:await page.title()};
+"""
     )
     played_raw = _tool_result(tool.execute(session_id=session_id, code=play_code))
     calls.append(played_raw)
@@ -365,10 +398,18 @@ def _youtube_verified_result(tool: Any, session_id: str, plan: dict[str,str]) ->
         watch_verified=False
     before = state.get("before", {}) if isinstance(state,dict) else {}
     after = state.get("after", {}) if isinstance(state,dict) else {}
-    try:
-        playing = played_raw["success"] and watch_verified and after.get("paused") is False and float(after.get("time",0))-float(before.get("time",0))>=0.4
-    except (TypeError,ValueError):
-        playing = False
+    def playable(sample: Any) -> bool:
+        if not isinstance(sample, dict):
+            return False
+        clock = sample.get("time")
+        ready = sample.get("ready_state")
+        return (sample.get("paused") is False and sample.get("ad") is False
+                and sample.get("ended") is False and sample.get("media_error") is None
+                and isinstance(ready, int) and not isinstance(ready, bool) and 2 <= ready <= 4
+                and isinstance(clock, (int, float)) and not isinstance(clock, bool)
+                and 0 <= clock < float("inf"))
+    playing = (played_raw["success"] and watch_verified and playable(before)
+               and playable(after) and after["time"] - before["time"] >= 0.4)
     return {
         "ok": bool(playing),
         "video_page_verified": bool(watch_verified),
@@ -881,7 +922,9 @@ Rules:
                 tools=[execute_tool],
                 bus=getattr(request.app.state, "bus", None),
                 max_turns=MAX_TURNS,
-                temperature=0.1,
+                # The first model behind the configured quality route rejects
+                # non-default temperature (observed gateway HTTP 400).
+                temperature=1,
                 max_tokens=1800,
                 interactive=False,
                 agent_id="firbo_browser",
