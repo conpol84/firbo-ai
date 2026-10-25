@@ -73,6 +73,20 @@ def _tool_result(result: Any) -> dict[str, Any]:
     }
 
 
+def _mark_browser_session_closed(app: Any, session_id: str) -> None:
+    """Short-lived process-local Stop marker; no new task authority or store."""
+    now = time.monotonic()
+    previous = getattr(app.state, "firbo_browser_closed_sessions", {})
+    recent = {key: stamp for key, stamp in previous.items() if now - stamp < 600}
+    recent[session_id] = now
+    # The MCP itself allows only a small number of concurrent browser sessions.
+    app.state.firbo_browser_closed_sessions = dict(sorted(recent.items(), key=lambda item: item[1])[-4096:])
+
+
+def _browser_session_was_closed(app: Any, session_id: str) -> bool:
+    return session_id in getattr(app.state, "firbo_browser_closed_sessions", {})
+
+
 def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     """Bounded read-only fast path; do not depend on an LLM for basic navigation.
 
@@ -717,6 +731,9 @@ def install_firbo_browser_route(router) -> None:
         close_tool = browser_tools.get(CLOSE_TOOL)
 
         if action == "close":
+            # Record before awaiting MCP close: the in-flight agent may finish
+            # while close is draining its current browser operation.
+            _mark_browser_session_closed(request.app, session_id)
             if close_tool is None:
                 return _json(503, {"error": "browser_tool_unavailable"})
             closed = await asyncio.to_thread(_close_session_tool, close_tool, session_id)
@@ -955,6 +972,8 @@ Rules:
             remaining_turns = MAX_TURNS
             next_prompt = prompt
             for attempt in range(2):
+                if attempt and _browser_session_was_closed(request.app, session_id):
+                    break
                 try:
                     result = await asyncio.to_thread(make_agent(remaining_turns).run, next_prompt)
                 except Exception:

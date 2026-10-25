@@ -234,6 +234,35 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertEqual(result["status"],"FAILED")
         self.assertEqual(len(Agent.invocations),1)
 
+    def test_stop_during_first_agent_run_prevents_recovery(self):
+        request=Request("Open https://example.com and read the first paragraph",Tool())
+        class StoppedAgent(Agent):
+            def run(self,prompt):
+                self.invocations.append((self.model,prompt))
+                scope["_mark_browser_session_closed"](request.app,request.body["session_id"])
+                return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
+        scope["NativeReActAgent"]=StoppedAgent
+        status,result=asyncio.run(self.handler(request))
+        self.assertEqual(status,200)
+        self.assertFalse(result["execution_verified"])
+        self.assertEqual(len(Agent.invocations),1)
+
+    def test_close_marks_the_exact_session_before_closing_mcp(self):
+        request=Request("unused",Tool())
+        request.body["action"]="close"
+        class CloseTool:
+            spec=types.SimpleNamespace(name="browser_session_close")
+            def execute(self,**kwargs):
+                self_session=kwargs["session_id"]
+                if not scope["_browser_session_was_closed"](request.app,self_session):
+                    raise AssertionError("Stop marker missing before MCP close")
+                return types.SimpleNamespace(tool_name=self.spec.name,success=True,content=json.dumps({"ok":True,"session_id":self_session}))
+        request.app.state.mcp_tools.append(CloseTool())
+        status,result=asyncio.run(self.handler(request))
+        self.assertEqual(status,200)
+        self.assertEqual(result["status"],"CLOSED")
+        self.assertFalse(scope["_browser_session_was_closed"](request.app,"22222222-2222-4222-8222-222222222222"))
+
     def test_tool_failure_retains_a_safe_cause_without_secret_text(self):
         status, result, _ = self.invoke("Open https://example.com", tool=Tool("TimeoutError"))
         self.assertEqual(result["status"],"FAILED")
