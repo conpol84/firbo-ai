@@ -2,7 +2,7 @@
 
 This adapter is used by the existing local FIRBO Connector desktop worker. It does not add another server, route, task authority or model provider. The Connector starts this Python process for each action; updating the known adapter does not require restarting the service.
 
-When DPMS reports Off/Standby/Suspend, capture verifies logind's current user session is X11, explicitly unlocked, and matches DISPLAY, then requests `xset dpms force on`. Locked, unknown or mismatched sessions stop with a finite error. No unlock, idle-policy change, permission change, input fallback or device substitution occurs. Entirely black frames stop before being passed to paid inference. An unsupported DPMS extension leaves normal capture available. A nonblack frame alone is not desktop-goal acceptance.
+When DPMS reports Off/Standby/Suspend, capture verifies logind's current user session is X11, explicitly unlocked, and matches DISPLAY, then requests `xset dpms force on`. Locked, unknown or mismatched sessions stop with a finite error. No unlock, idle-policy change, permission change, input fallback or device substitution occurs. If the first frame stays black after DPMS wakes, capture verifies the unlocked matching session again and resets the transient X11 blanker once (`xset s reset`), then captures again. This does not disable screensaving or alter its timeout; it never sends an unlock or locker-deactivation command. Persistently black frames stop before paid inference. This release upgrades the known first DPMS repair; its private backup allows rollback to that version. An unsupported DPMS extension leaves normal capture available. A nonblack frame alone is not desktop-goal acceptance.
 
 ## Owner-authorized installation
 

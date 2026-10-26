@@ -33,10 +33,8 @@ def display_power():
     return match.group(1) if match else None  # Xvfb may not implement DPMS.
 
 
-def wake_display():
-    """Wake only this unlocked X11 session. Never change lock/idle policies."""
-    if display_power() not in ("Off", "Standby", "Suspend"):
-        return
+def verify_unlocked_session():
+    """Require positive evidence before either kind of transient display wake."""
     try:
         def query(*args):
             return subprocess.run(["loginctl", *args], capture_output=True,
@@ -54,6 +52,16 @@ def wake_display():
                 or not re.fullmatch(r":\d+(?:\.\d+)?", target)
                 or values.get("Display") != target.split(".")[0]):
             raise ValueError("desktop_session_unverified")
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("desktop_session_unverified") from None
+
+
+def wake_display():
+    """Wake only this unlocked X11 session. Never change lock/idle policies."""
+    if display_power() not in ("Off", "Standby", "Suspend"):
+        return
+    verify_unlocked_session()
+    try:
         subprocess.run(["xset", "dpms", "force", "on"], capture_output=True,
                        check=True, timeout=3)
         time.sleep(0.2)
@@ -68,7 +76,19 @@ def capture():
     wake_display()
     image = ImageGrab.grab(xdisplay=os.environ["DISPLAY"]).convert("RGB")
     if max(channel[1] for channel in image.getextrema()) < 8:
-        raise ValueError("desktop_capture_black")
+        # DPMS power and the X server's blanker are independent. Reset only the
+        # transient blanker after checking the exact unlocked session again.
+        # This does not disable screensaving, change timeouts or unlock a locker.
+        verify_unlocked_session()
+        try:
+            subprocess.run(["xset", "s", "reset"], capture_output=True,
+                           check=True, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            raise ValueError("desktop_blanker_reset_failed") from None
+        time.sleep(0.3)
+        image = ImageGrab.grab(xdisplay=os.environ["DISPLAY"]).convert("RGB")
+        if max(channel[1] for channel in image.getextrema()) < 8:
+            raise ValueError("desktop_capture_black")
     original = image.size
     image.thumbnail((1280, 960))
     for quality in (75, 60, 45, 30):
