@@ -15,8 +15,8 @@ import subprocess
 import tempfile
 from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 
-OLD_SHA = "5c65a5fcaa96af709643cdb5c99ec4e2b948964ff231359142237ba0f42af4a5"
-NEW_SHA = "15d7da5b254f32e3a867a44a2b4efbd61c8c1ce6b24b251654f16b199f0220fd"
+OLD_SHA = "15d7da5b254f32e3a867a44a2b4efbd61c8c1ce6b24b251654f16b199f0220fd"
+NEW_SHA = "ee7835e7b74f9fcab98acd4e38e1fd3d293dcf33d44f189ab16a3b50628728bc"
 
 
 def digest(data):

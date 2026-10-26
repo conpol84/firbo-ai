@@ -66,7 +66,7 @@ class WakeTests(unittest.TestCase):
 
     def test_black_capture_stops_before_inference_and_valid_capture_still_works(self):
         from PIL import Image, ImageGrab
-        with patch.object(adapter, 'wake_display'), patch.dict(os.environ, {'DISPLAY': ':0'}):
+        with patch.object(adapter, 'wake_display'), patch.object(adapter, 'verify_unlocked_session'), patch.object(adapter.subprocess, 'run'), patch.object(adapter.time, 'sleep'), patch.dict(os.environ, {'DISPLAY': ':0'}):
             for color in ['black', 'white']:
                 with patch.object(ImageGrab, 'grab', return_value=Image.new('RGB', (100, 80), color)):
                     if color == 'black':
@@ -75,6 +75,20 @@ class WakeTests(unittest.TestCase):
                         frame = adapter.capture()
                         self.assertEqual((frame['width'], frame['height']), (100, 80))
                         self.assertTrue(frame['image'])
+
+    def test_black_frame_wakes_blanker_once_and_rechecks_capture(self):
+        from PIL import Image, ImageGrab
+        with patch.object(adapter, 'wake_display'), patch.object(adapter, 'verify_unlocked_session') as verify, patch.object(adapter.subprocess, 'run') as run, patch.object(adapter.time, 'sleep'), patch.dict(os.environ, {'DISPLAY': ':0'}), patch.object(ImageGrab, 'grab', side_effect=[Image.new('RGB', (100,80), 'black'),Image.new('RGB', (100,80), 'white')]):
+            self.assertTrue(adapter.capture()['image'])
+            verify.assert_called_once()
+            self.assertEqual(run.call_args.args[0], ['xset', 's', 'reset'])
+            self.assertEqual(run.call_count, 1)
+
+    def test_locked_black_frame_never_resets_blanker(self):
+        from PIL import Image, ImageGrab
+        with patch.object(adapter, 'wake_display'), patch.object(adapter, 'verify_unlocked_session', side_effect=ValueError('desktop_session_locked')), patch.object(adapter.subprocess, 'run') as run, patch.dict(os.environ, {'DISPLAY': ':0'}), patch.object(ImageGrab, 'grab', return_value=Image.new('RGB', (100,80), 'black')):
+            with self.assertRaisesRegex(ValueError, 'desktop_session_locked'): adapter.capture()
+            run.assert_not_called()
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
