@@ -43,12 +43,14 @@ def verify_unlocked_session():
         if not re.fullmatch(r"[A-Za-z0-9]{1,20}", session):
             raise ValueError("desktop_session_unverified")
         values = dict(line.split("=", 1) for line in query(
-            "show-session", session, "-p", "LockedHint", "-p", "Display", "-p", "Type"
+            "show-session", session, "-p", "LockedHint", "-p", "Display", "-p", "Type", "-p", "Active"
         ).splitlines() if "=" in line)
         if values.get("LockedHint") == "yes":
             raise ValueError("desktop_session_locked")
+        if values.get("Active") == "no":
+            raise ValueError("desktop_session_inactive")
         target = os.environ.get("DISPLAY", "")
-        if (values.get("LockedHint") != "no" or values.get("Type") != "x11"
+        if (values.get("LockedHint") != "no" or values.get("Active") != "yes" or values.get("Type") != "x11"
                 or not re.fullmatch(r":\d+(?:\.\d+)?", target)
                 or values.get("Display") != target.split(".")[0]):
             raise ValueError("desktop_session_unverified")
@@ -73,6 +75,7 @@ def wake_display():
 
 def capture():
     from PIL import ImageGrab
+    verify_unlocked_session()
     wake_display()
     image = ImageGrab.grab(xdisplay=os.environ["DISPLAY"]).convert("RGB")
     if max(channel[1] for channel in image.getextrema()) < 8:
@@ -115,6 +118,7 @@ def perform(action):
     kind = action.get("action")
     if kind == "observe":
         return capture()
+    verify_unlocked_session()
     # The top-left corner is a local physical stop, independent of the server.
     physical_stop()
     if kind in ("click", "move", "drag"):

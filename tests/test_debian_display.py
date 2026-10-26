@@ -18,7 +18,7 @@ adapter = module('adapter', ROOT / 'services/desktop-worker/firbo-desktop.py')
 repair = module('repair', ROOT / 'scripts/repair-debian-display.py')
 
 class WakeTests(unittest.TestCase):
-    def run_wake(self, values='LockedHint=no\nDisplay=:0\nType=x11', after='On', before='Off'):
+    def run_wake(self, values='LockedHint=no\nDisplay=:0\nType=x11\nActive=yes', after='On', before='Off'):
         calls = []
         def run(args, **kwargs):
             calls.append(args)
@@ -80,7 +80,7 @@ class WakeTests(unittest.TestCase):
         from PIL import Image, ImageGrab
         with patch.object(adapter, 'wake_display'), patch.object(adapter, 'verify_unlocked_session') as verify, patch.object(adapter.subprocess, 'run') as run, patch.object(adapter.time, 'sleep'), patch.dict(os.environ, {'DISPLAY': ':0'}), patch.object(ImageGrab, 'grab', side_effect=[Image.new('RGB', (100,80), 'black'),Image.new('RGB', (100,80), 'white')]):
             self.assertTrue(adapter.capture()['image'])
-            verify.assert_called_once()
+            self.assertEqual(verify.call_count, 2)
             self.assertEqual(run.call_args.args[0], ['xset', 's', 'reset'])
             self.assertEqual(run.call_count, 1)
 
@@ -89,6 +89,23 @@ class WakeTests(unittest.TestCase):
         with patch.object(adapter, 'wake_display'), patch.object(adapter, 'verify_unlocked_session', side_effect=ValueError('desktop_session_locked')), patch.object(adapter.subprocess, 'run') as run, patch.dict(os.environ, {'DISPLAY': ':0'}), patch.object(ImageGrab, 'grab', return_value=Image.new('RGB', (100,80), 'black')):
             with self.assertRaisesRegex(ValueError, 'desktop_session_locked'): adapter.capture()
             run.assert_not_called()
+
+    def test_inactive_session_is_identified_without_wake_or_session_switch(self):
+        calls, error = self.run_wake('LockedHint=no\nDisplay=:0\nType=x11\nActive=no')
+        self.assertEqual(error, 'desktop_session_inactive')
+        self.assertFalse(any(x[:2] == ['xset', 'dpms'] for x in calls))
+        self.assertFalse(any('activate' in x or 'unlock-session' in x for x in calls))
+
+    def test_inactive_session_never_captures_even_with_monitor_on(self):
+        from PIL import ImageGrab
+        with patch.object(adapter, 'verify_unlocked_session', side_effect=ValueError('desktop_session_inactive')), patch.object(adapter, 'wake_display') as wake, patch.object(ImageGrab, 'grab') as grab:
+            with self.assertRaisesRegex(ValueError, 'desktop_session_inactive'): adapter.capture()
+            wake.assert_not_called(); grab.assert_not_called()
+
+    def test_session_switch_during_planning_blocks_the_next_input(self):
+        with patch.dict(os.environ, {'DISPLAY': ':0', 'WAYLAND_DISPLAY': ''}), patch.object(adapter.os, 'geteuid', return_value=1000), patch.object(adapter, 'verify_unlocked_session', side_effect=ValueError('desktop_session_inactive')), patch.object(adapter, 'xdo') as xdo:
+            with self.assertRaisesRegex(ValueError, 'desktop_session_inactive'): adapter.perform({'action':'key','key':'Return'})
+            xdo.assert_not_called()
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
