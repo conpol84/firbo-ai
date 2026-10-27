@@ -36,6 +36,7 @@ class GuardTests(unittest.TestCase):
         self.assertTrue(len(fw.BRIDGE)<=15)
         self.assertEqual(fw.JUMP,("-i",fw.BRIDGE,"-j",fw.CHAIN))
         self.assertEqual(fw.HOST_DROP,("-i",fw.BRIDGE,"-j","DROP"))
+        self.assertEqual(fw.V6_DROP,("-i",fw.BRIDGE,"-j","DROP"))
         self.assertNotEqual(fw.NETWORK,"bridge")
         self.assertLess(len(fw.CHAIN),28)
         src=GUARD.read_text()
@@ -46,6 +47,8 @@ class GuardTests(unittest.TestCase):
             self.assertNotIn(forbidden,src)
         self.assertIn('ipt("-I","DOCKER-USER","1",*JUMP)',src)
         self.assertIn('ipt("-I","INPUT","1",*HOST_DROP)',src)
+        self.assertIn('v6ipt("-I","INPUT","1",*V6_DROP)',src)
+        self.assertIn('v6ipt("-I","FORWARD","1",*V6_DROP)',src)
 
     def test_bogon_drop_rules_precede_all_approved_public_ports(self):
         rules=fw.expected()
@@ -91,6 +94,9 @@ class GuardTests(unittest.TestCase):
              patch.object(fw,"network_record",return_value=SYNTHETIC),\
              patch.object(fw,"docker_iptables_backend",return_value=True),\
              patch.object(fw,"assert_policy") as verify_rules,\
+             patch.object(fw,"v6present",return_value=True),\
+             patch.object(fw,"v6_first_rule",side_effect=lambda chain:
+                f"-A {chain} -i {fw.BRIDGE} -j DROP"),\
              patch.object(fw,"present",return_value=True),\
              patch.object(fw,"first_rule",side_effect=lambda chain:{
                "DOCKER-USER":"-A DOCKER-USER -j RETURN",
@@ -102,6 +108,9 @@ class GuardTests(unittest.TestCase):
              patch.object(fw,"network_record",return_value=SYNTHETIC),\
              patch.object(fw,"docker_iptables_backend",return_value=True),\
              patch.object(fw,"assert_policy"),\
+             patch.object(fw,"v6present",return_value=True),\
+             patch.object(fw,"v6_first_rule",side_effect=lambda chain:
+                f"-A {chain} -i {fw.BRIDGE} -j DROP"),\
              patch.object(fw,"present",return_value=True),\
              patch.object(fw,"first_rule",side_effect=lambda chain:{
                "DOCKER-USER":f"-A DOCKER-USER -i {fw.BRIDGE} -j {fw.CHAIN}",
@@ -138,12 +147,16 @@ class GuardTests(unittest.TestCase):
              patch.object(fw,"network_record",return_value=SYNTHETIC),\
              patch.object(fw,"docker_iptables_backend",return_value=True),\
              patch.object(fw,"ipt",side_effect=ipt),\
+             patch.object(fw,"v6ipt",side_effect=lambda *a,**kw: calls.append(("v6",*a))),\
+             patch.object(fw,"v6present",return_value=False),\
              patch.object(fw,"present",return_value=False),\
              patch.object(fw,"verify",return_value=None):
             fw.ensure()
         self.assertIn(("-N",fw.CHAIN),calls)
         self.assertIn(("-I","DOCKER-USER","1",*fw.JUMP),calls)
         self.assertIn(("-I","INPUT","1",*fw.HOST_DROP),calls)
+        self.assertIn(("v6","-I","INPUT","1",*fw.V6_DROP),calls)
+        self.assertIn(("v6","-I","FORWARD","1",*fw.V6_DROP),calls)
         for call in calls:
             if call[:1] in (("-I",),("-A",),("-N",)):
                 self.assertTrue(
