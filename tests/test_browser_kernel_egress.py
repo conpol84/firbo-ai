@@ -184,8 +184,7 @@ class GuardTests(unittest.TestCase):
              patch.object(fw,"v6ipt",return_value="-P INPUT ACCEPT"), \
              patch.object(fw,"policy_rules",return_value=prefix), \
              patch.object(fw,"present",return_value=True), \
-             patch.object(fw,"v6present",return_value=True), \
-             patch.object(fw,"v6ipt",return_value="-P INPUT ACCEPT"):
+             patch.object(fw,"v6present",return_value=True):
             fw.remove()
         self.assertIn(("-F",fw.CHAIN),actions)
         self.assertIn(("-X",fw.CHAIN),actions)
