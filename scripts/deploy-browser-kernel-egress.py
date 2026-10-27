@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -172,22 +173,26 @@ def atomic_file(path:Path,text:str,mode:int)->None:
 def health()->None:
     if run("systemctl","is-active","openjarvis.service")!="active":
         raise RuntimeError("openjarvis_unhealthy")
-    with urllib.request.urlopen(
-      urllib.request.Request("http://127.0.0.1:8765/health"),
-      timeout=3
-    ) as resp:
+    # Local-only HTTP without shell, curl, system proxy variables or secrets.
+    health=http.client.HTTPConnection("127.0.0.1",8765,timeout=3)
+    try:
+        health.request("GET","/health")
+        resp=health.getresponse()
         if resp.status!=200:
             raise RuntimeError("browser_host_health_unverified")
+        resp.read()
+    finally:
+        health.close()
+    check=http.client.HTTPConnection("127.0.0.1",8765,timeout=3)
     try:
-        urllib.request.urlopen(urllib.request.Request(
-            "http://127.0.0.1:8765/v1/firbo/browser",
-            data=b"{}",headers={"Content-Type":"application/json"},
-            method="POST"
-        ),timeout=3)
-        raise RuntimeError("browser_auth_boundary_missing")
-    except urllib.error.HTTPError as ex:
-        if ex.code!=401:
+        check.request("POST","/v1/firbo/browser",
+                      body=b"{}",headers={"Content-Type":"application/json"})
+        response=check.getresponse()
+        if response.status!=401:
             raise RuntimeError("browser_auth_boundary_missing")
+        response.read()
+    finally:
+        check.close()
 
 def wait_health()->None:
     for _ in range(22):
@@ -223,7 +228,17 @@ async function blocked(host){
   blocked('169.254.169.254')
  ]);
  if(results.some(x=>x!==true))process.exit(19);
- const ipv6=await blocked('2606:4700:4700::1111');
+ const ipv6=await new Promise(resolve=>{
+  const s=new Socket();
+  let finished=false;
+  const done=ok=>{if(finished)return;finished=true;s.destroy();resolve(ok)};
+  s.setTimeout(1500,()=>done(false)); // Timeout indicates an IPv6 route exists.
+  s.once('connect',()=>done(false));
+  s.once('error',err=>done(
+   ['ENETUNREACH','EHOSTUNREACH','EAFNOSUPPORT','EADDRNOTAVAIL'].includes(err.code)
+  ));
+  s.connect(443,'2606:4700:4700::1111');
+ });
  if(!ipv6)process.exit(20);
  console.log('FIRBO_BROWSER_KERNEL_PRIVATE_NETWORK_NEGATIVE_PASS');
 })().catch(()=>process.exit(21));
@@ -287,6 +302,7 @@ def apply()->None:
         # NEW dedicated label + interface, not Docker's shared default bridge.
         run("docker","network","create","--driver","bridge",
             "--opt","com.docker.network.bridge.name="+fw.BRIDGE,
+            "--opt","com.docker.network.bridge.enable_icc=false",
             "--label",fw.LABEL+"="+fw.LABEL_VALUE,
             fw.NETWORK,timeout=25)
         fw.ensure()
