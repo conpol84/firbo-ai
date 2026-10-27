@@ -41,6 +41,8 @@ def prepped(stack,root,events):
         events.append(("command",argv))
         if argv[-2:]==("rev-parse","HEAD"):
             return "source-commit"
+        if argv[:2]==("systemctl","is-active"):
+            return "active"
         if argv[:1]==("python3",):
             return "FIRBO_BROWSER_DIRECT_READ_NO_MODEL_E2E_PASS"
         return ""
