@@ -112,7 +112,7 @@ def before()->str:
         if not path.is_file() or path.is_symlink():
             raise RuntimeError("root_browser_wrapper_missing")
         st=path.stat()
-        if st.st_uid!=0 or (st.st_mode & 0o022):
+        if st.st_uid!=0 or (st.st_mode & 0o777)!=0o755:
             raise RuntimeError("wrapper_owner_or_mode_untrusted")
     original=WRAPPER.read_text(encoding="utf-8")
     if original.count(BEFORE)!=1 or AFTER in original:
@@ -268,27 +268,38 @@ def restore_state(manifest:dict)->None:
     if original.is_file() and WRAPPER.is_file():
         shutil.copy2(original,WRAPPER)
         os.chown(WRAPPER,0,0)
+        os.chmod(WRAPPER,0o755)  # backup itself was mode 0700
     if DROPIN.is_file() and DROPIN.read_text()==DROPIN_TEXT:
         DROPIN.unlink()
     run("systemctl","daemon-reload",check=False)
     # Restore old already-accepted browser service while kernel guard is
     # still active; no Browser session can run unrestricted during rollback.
     run("systemctl","restart","openjarvis.service",check=False,timeout=30)
+    service_ok=run("systemctl","is-active","openjarvis.service",check=False)=="active"
+    firewall_ok=False
     try:
         fw.remove()
+        firewall_ok=True
     except (RuntimeError,OSError,subprocess.TimeoutExpired):
         # Preserve restrictive rules rather than touching foreign firewall.
         print("FIRBO_BROWSER_FIREWALL_CLEANUP_NEEDS_REVIEW")
     run("docker","network","rm",fw.NETWORK,check=False)
+    guard_removed=not GUARD_INSTALLED.exists()
     if GUARD_INSTALLED.is_file():
         data=GUARD_INSTALLED.read_bytes()
         if data==(ROOT/"scripts/browser-kernel-guard.py").read_bytes():
             GUARD_INSTALLED.unlink()
-    # Keep backups/manifest for forensics if cleanup incomplete.
-    if not fw.run("docker","network","inspect",fw.NETWORK,checked=False):
+            guard_removed=True
+    # Never erase the recovery manifest if any cleanup/restart was partial.
+    network_gone=not fw.run("docker","network","inspect",fw.NETWORK,checked=False)
+    wrapper_ok=original.is_file() and WRAPPER.is_file() and WRAPPER.read_bytes()==original.read_bytes()
+    unit_ok=not DROPIN.exists()
+    if network_gone and firewall_ok and guard_removed and wrapper_ok and service_ok and unit_ok:
         if STATE.is_file():
             STATE.unlink()
         print("FIRBO_BROWSER_KERNEL_ROLLBACK_COMPLETE")
+    else:
+        print("FIRBO_BROWSER_KERNEL_ROLLBACK_INCOMPLETE_OWNER_REVIEW_REQUIRED")
 
 def apply()->None:
     original=before()
