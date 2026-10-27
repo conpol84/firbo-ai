@@ -21,8 +21,8 @@ jobs:
           python-version: "3.12"
       - run: pip install -r services/orchestrator/requirements.txt pytest Pillow
       - run: python -m pytest -q tests
-      - run: python -m py_compile services/browser-mcp/firbo_browser_route.py
-      - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh scripts/install-browser-mcp.sh scripts/accept-selfhosted-browser.sh scripts/deploy-browser-route-only.sh scripts/deploy-browser-route-without-checkout.sh
+      - run: python -m py_compile services/browser-mcp/firbo_browser_route.py scripts/accept-browser-direct-read-no-model.py
+      - run: bash -n scripts/bootstrap.sh scripts/dev-up.sh scripts/dev-down.sh scripts/doctor.sh scripts/install-browser-mcp.sh scripts/accept-selfhosted-browser.sh scripts/deploy-browser-route-only.sh scripts/deploy-browser-route-without-checkout.sh scripts/deploy-browser-read-v1.sh
       - run: node --check services/browser-mcp/server.mjs && node --check services/browser-mcp/create-session.mjs
       - run: |
           node services/browser-mcp/create-session.mjs | node --input-type=module -e '
