@@ -39,7 +39,7 @@ def prepped(stack,root,events):
     stack.enter_context(patch.object(release.os,"chown",return_value=None))
     def fake_run(*argv,**kw):
         events.append(("command",argv))
-        if argv[-3:]==("rev-parse","HEAD"):
+        if argv[-2:]==("rev-parse","HEAD"):
             return "source-commit"
         if argv[:1]==("python3",):
             return "FIRBO_BROWSER_DIRECT_READ_NO_MODEL_E2E_PASS"
