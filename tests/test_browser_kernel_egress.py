@@ -137,6 +137,61 @@ class GuardTests(unittest.TestCase):
                  patch.object(fw,"policy_rules",return_value=candidate):
                 with self.assertRaises(RuntimeError):fw.assert_policy()
 
+    def test_docker_user_hook_must_be_first_in_forward_chain(self):
+        with patch.object(fw,"run",return_value=""), \
+             patch.object(fw.os.path,"isfile",return_value=False), \
+             patch.object(fw,"ipt",return_value="-N DOCKER-USER"), \
+             patch.object(fw,"present",return_value=True), \
+             patch.object(fw,"first_rule",return_value="-A FORWARD -j ACCEPT"):
+            self.assertFalse(fw.docker_iptables_backend())
+        with patch.object(fw,"run",return_value=""), \
+             patch.object(fw.os.path,"isfile",return_value=False), \
+             patch.object(fw,"ipt",return_value="-N DOCKER-USER"), \
+             patch.object(fw,"present",return_value=True), \
+             patch.object(fw,"first_rule",return_value="-A FORWARD -j DOCKER-USER"):
+            self.assertTrue(fw.docker_iptables_backend())
+
+    def test_rollback_refuses_foreign_rule_without_modifying_firewall(self):
+        actions=[]
+        def fake_ipt(*args,checked=True):
+            actions.append(args)
+            if args[:1]==("-S",):return "-P INPUT ACCEPT"
+            return ""
+        bad=[
+          f"-A {fw.CHAIN} -j RETURN",
+          f"-A {fw.CHAIN} -p tcp -m tcp --dport 80 -j RETURN",
+        ]
+        with patch.object(fw.os,"geteuid",return_value=0), \
+             patch.object(fw,"ipt",side_effect=fake_ipt), \
+             patch.object(fw,"v6ipt",return_value="-P INPUT ACCEPT"), \
+             patch.object(fw,"policy_rules",return_value=bad), \
+             patch.object(fw,"present",return_value=True), \
+             patch.object(fw,"v6present",return_value=True):
+            with self.assertRaises(RuntimeError):
+                fw.remove()
+        self.assertFalse(any(a[0] in ("-D","-F","-X") for a in actions),
+          "foreign rules must never be deleted")
+
+    def test_rollback_allows_only_strict_prefix_of_our_own_rules(self):
+        actions=[]
+        def ipt(*args,checked=True):
+            actions.append(args)
+            if args[:1]==("-S",):return "-N FIRBO_BROWSER_V1"
+            return ""
+        prefix=[f"-A {fw.CHAIN} -d {cidr} -j DROP" for cidr in fw.BOGONS[:3]]
+        with patch.object(fw.os,"geteuid",return_value=0), \
+             patch.object(fw,"ipt",side_effect=ipt), \
+             patch.object(fw,"v6ipt",return_value="-P INPUT ACCEPT"), \
+             patch.object(fw,"policy_rules",return_value=prefix), \
+             patch.object(fw,"present",return_value=True), \
+             patch.object(fw,"v6present",return_value=True), \
+             patch.object(fw,"v6ipt",return_value="-P INPUT ACCEPT"):
+            fw.remove()
+        self.assertIn(("-F",fw.CHAIN),actions)
+        self.assertIn(("-X",fw.CHAIN),actions)
+        self.assertNotIn(("-F","DOCKER-USER"),actions)
+        self.assertNotIn(("-F","INPUT"),actions)
+
     def test_ensure_never_modifies_shared_docker_chains_or_default_policy(self):
         calls=[]
         def ipt(*args,checked=True):
