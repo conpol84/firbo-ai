@@ -61,6 +61,36 @@ class Tool:
         return types.SimpleNamespace(tool_name=self.spec.name, success=not self.failure, content=json.dumps(payload))
 
 
+
+class ParagraphTool(Tool):
+    def __init__(self, paragraph=None, read_url=None, read_title=None, on_read=None):
+        super().__init__()
+        self.paragraph = ("The opening paragraph contains actual readable content from "
+                          "the public fixture page, returned by a real DOM locator."
+                          if paragraph is None else paragraph)
+        self.read_url = read_url
+        self.read_title = read_title
+        self.on_read = on_read
+
+    def execute(self, **kwargs):
+        if "first_visible_paragraph" not in kwargs.get("code", ""):
+            return super().execute(**kwargs)
+        self.calls.append(kwargs)
+        if self.on_read:
+            self.on_read()
+        value = {
+            "url": self.read_url if self.read_url is not None else self.url,
+            "title": self.read_title if self.read_title is not None else "Example Domain",
+            "selection": "first_visible_paragraph",
+            "text": self.paragraph,
+        }
+        payload = {"ok": True,
+                   "page": {"url": self.url, "title": "Example Domain"},
+                   "value": value}
+        return types.SimpleNamespace(tool_name=self.spec.name, success=True,
+                                     content=json.dumps(payload))
+
+
 class Agent:
     invocations = []
     results = []
@@ -115,7 +145,7 @@ class BrowserRouteTests(unittest.TestCase):
 
     def test_find_and_greek_read_never_finish_after_opening_a_page(self):
         for goal in ["Open https://example.com and find the release notes",
-                     "Open https://example.com και διάβασε την πρώτη παράγραφο"]:
+                     "Open https://example.com και σύνοψισε την πρώτη παράγραφο"]:
             status, result, _ = self.invoke(goal)
             self.assertEqual(status,200)
             self.assertEqual(result["status"],"FAILED")
@@ -127,7 +157,7 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertEqual(len(Agent.invocations),2)
 
     def test_agent_uses_supported_temperature_without_switching_model(self):
-        status, result, _ = self.invoke("Open https://example.com and read the first paragraph")
+        status, result, _ = self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(status, 200)
         self.assertEqual(Agent.configurations[0]["temperature"], 1)
         self.assertEqual(Agent.invocations[0][0], "test/quality")
@@ -138,7 +168,7 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertNotIn("Action Input:", Agent.invocations[0][1])
 
     def test_tool_guard_rejects_wrong_session_and_closed_session(self):
-        request = Request("Open https://example.com and read the first paragraph", Tool())
+        request = Request("Open https://example.com and summarize the first paragraph", Tool())
         asyncio.run(self.handler(request))
         guard = Agent.configurations[0]["before_tool_call"]
         args = {"session_id":request.body["session_id"], "code":"return await page.title();"}
@@ -150,11 +180,78 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertFalse(guard("browser_session_execute", args))
 
     def test_tool_guard_has_a_shared_call_budget(self):
-        self.invoke("Open https://example.com and read the first paragraph")
+        self.invoke("Open https://example.com and summarize the first paragraph")
         guard = Agent.configurations[0]["before_tool_call"]
         args = {"session_id":"11111111-1111-4111-8111-111111111111", "code":"return await page.title();"}
         self.assertTrue(all(guard("browser_session_execute", args) for _ in range(10)))
         self.assertFalse(guard("browser_session_execute", args))
+
+
+    def test_explicit_first_paragraph_read_returns_real_evidence_without_model(self):
+        for goal in [
+            "Open https://example.com and read the first paragraph",
+            "Open https://example.com and extract the first visible paragraph",
+            "Open https://example.com και διάβασε την πρώτη παράγραφο",
+        ]:
+            with self.subTest(goal=goal):
+                status, result, tool = self.invoke(goal, tool=ParagraphTool(), engine=False)
+                self.assertEqual(status, 200)
+                self.assertEqual(result["status"], "COMPLETED")
+                self.assertTrue(result["execution_verified"])
+                self.assertEqual(result["verified_steps"], ["navigate", "read"])
+                self.assertEqual(result["missing_steps"], [])
+                self.assertEqual(result["tool_count"], 2)
+                self.assertEqual(result["tool_observations"], 2)
+                self.assertIn("opening paragraph contains actual", result["result"])
+                self.assertEqual(result["diagnostics"]["mode"], "navigation")
+                self.assertFalse(result["diagnostics"]["model_attempted"])
+                self.assertEqual(Agent.invocations, [])
+                self.assertEqual(len(tool.calls), 2)
+
+    def test_direct_read_fails_closed_on_empty_wrong_page_or_login_content(self):
+        for tool in [
+            Tool(), ParagraphTool(paragraph="short"),
+            ParagraphTool(read_url="https://unrelated.example.org/"),
+            ParagraphTool(read_title="Wrong title"),
+            ParagraphTool(paragraph="Sign in to verify you are human to read this page."),
+        ]:
+            with self.subTest(tool=type(tool).__name__):
+                status, result, _ = self.invoke(
+                    "Open https://example.com and read the first paragraph",
+                    tool=tool, engine=False)
+                self.assertEqual(status, 200)
+                self.assertEqual(result["status"], "FAILED")
+                self.assertFalse(result["execution_verified"])
+                self.assertEqual(result["missing_steps"], ["read"])
+                self.assertEqual(result["diagnostics"]["model_attempted"], False)
+                self.assertEqual(Agent.invocations, [])
+
+    def test_closed_session_must_not_complete_after_dom_read(self):
+        tool = ParagraphTool()
+        req = Request("Open https://example.com and read the first paragraph", tool, engine=False)
+        tool.on_read = lambda: scope["_mark_browser_session_closed"](req.app, req.body["session_id"])
+        status, result = asyncio.run(self.handler(req))
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "FAILED")
+        self.assertFalse(result["execution_verified"])
+        self.assertEqual(result["missing_steps"], ["read"])
+        self.assertEqual(Agent.invocations, [])
+
+    def test_direct_read_refuses_unknown_suffix_actions_and_summaries(self):
+        direct = scope["_direct_browser_plan"]
+        for goal in [
+            "Open https://example.com and summarize the first paragraph",
+            "Open https://example.com and read the first paragraph then click the button",
+            "Open https://example.com and read the first paragraph and email it",
+            "Open https://example.com and read the first paragraph and submit payment",
+        ]:
+            with self.subTest(goal=goal):
+                plan = direct(goal)
+                self.assertIsNotNone(plan)
+                self.assertFalse(plan["read_first_paragraph"])
+                self.assertFalse(plan["complete_on_navigation"])
+        self.assertIsNone(direct("Do not open https://example.com and read the first paragraph"))
+
 
     def test_title_only_read_returns_observed_title_without_model(self):
         status, result, tool = self.invoke("Open https://example.com and read the page title", engine=False)
@@ -181,7 +278,7 @@ class BrowserRouteTests(unittest.TestCase):
                 tool_result=types.SimpleNamespace(tool_name="browser_session_execute",success=True,content=json.dumps(payload))
                 return types.SimpleNamespace(content="Read the paragraph",tool_results=[tool_result],turns=2)
         scope["OrchestratorAgent"]=RecoveringAgent
-        status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        status,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(status,200)
         self.assertEqual(result["status"],"COMPLETED")
         self.assertEqual(result["verified_steps"],["navigate","read"])
@@ -195,7 +292,7 @@ class BrowserRouteTests(unittest.TestCase):
                 self.invocations.append((self.model,prompt))
                 return types.SimpleNamespace(content="I read everything",tool_results=[],turns=1)
         scope["OrchestratorAgent"]=NoEvidenceAgent
-        _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        _,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(result["status"],"FAILED")
         self.assertEqual(result["missing_steps"],["read"])
         self.assertEqual(len(Agent.invocations),2)
@@ -211,7 +308,7 @@ class BrowserRouteTests(unittest.TestCase):
                         self.invocations.append((self.model,prompt))
                         return types.SimpleNamespace(content=reply,tool_results=[],turns=min(turns,self.kwargs["max_turns"]))
                 scope["OrchestratorAgent"]=BoundedAgent
-                _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+                _,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
                 self.assertEqual(len(Agent.invocations),expected_calls)
                 if expected_calls==2:
                     self.assertEqual(Agent.configurations[1]["max_turns"],2)
@@ -238,7 +335,7 @@ class BrowserRouteTests(unittest.TestCase):
         scope["OrchestratorAgent"]=CrashingAgent
         buffer=io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+            status,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(status,503)
         self.assertEqual(result["error"],"browser_execution_failed")
         self.assertEqual(result["failure_class"],"timeout")
@@ -265,7 +362,7 @@ class BrowserRouteTests(unittest.TestCase):
                     raise RuntimeError("PRIVATE PROVIDER RESPONSE")
                 return types.SimpleNamespace(content="Done",tool_results=[],turns=1)
         scope["OrchestratorAgent"]=FailingRecoveryAgent
-        status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        status,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(status,200)
         self.assertEqual(result["status"],"FAILED")
         self.assertEqual(result["tool_count"],1)
@@ -281,12 +378,12 @@ class BrowserRouteTests(unittest.TestCase):
         clock=iter([0,55,56])
         scope["time"]=types.SimpleNamespace(monotonic=lambda:next(clock))
         self.addCleanup(scope.__setitem__,"time",old_time)
-        _,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        _,result,_=self.invoke("Open https://example.com and summarize the first paragraph")
         self.assertEqual(result["status"],"FAILED")
         self.assertEqual(len(Agent.invocations),1)
 
     def test_stop_during_first_agent_run_prevents_recovery(self):
-        request=Request("Open https://example.com and read the first paragraph",Tool())
+        request=Request("Open https://example.com and summarize the first paragraph",Tool())
         class StoppedAgent(Agent):
             def run(self,prompt):
                 self.invocations.append((self.model,prompt))
