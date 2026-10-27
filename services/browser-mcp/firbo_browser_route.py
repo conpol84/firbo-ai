@@ -275,7 +275,7 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         "url": url,
         "hostname": hostname,
         "expected_title": expected.group(1).strip() if expected else None,
-        "complete_on_navigation": not search_seed and (not needs_more or bool(read_title_only)) and known_tail,
+        "complete_on_navigation": not simple_read and not search_seed and (not needs_more or bool(read_title_only)) and known_tail,
         "read_first_paragraph": bool(simple_read),
     }
 
