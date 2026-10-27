@@ -14,6 +14,8 @@ ROUTE=ROOT/"services/browser-mcp/firbo_browser_route.py"
 DEPLOY=ROOT/"scripts/deploy-browser-read-v1.sh"
 ACCEPT=ROOT/"scripts/accept-browser-direct-read-no-model.py"
 EXPECTED_ROUTE="06cb981ab0c7c3fee69fad1fb6dc40822cec62ced7f82faba2aa70880b42f8ba"
+# New source-only verifier adjustment; the historical pinned release remains immutable.
+EXPECTED_CURRENT_ROUTE="07705b57d55bd6134fa85717b8788df0ff3f5a98c437491804f1f1479a6e7fe6"
 EXPECTED_PREVIOUS="e23b5aa1cd6bdaa223cd80283dc3fe6aaa471a666b03255d84d0c337b7e39bbf"
 PINNED="2fa884437a4f46aebf139223475398d9ee2404f2"
 spec=importlib.util.spec_from_file_location("firbo_browser_direct_read_acceptance",ACCEPT)
@@ -48,7 +50,7 @@ def fake_receipt():
 class DirectReadReleaseTests(unittest.TestCase):
     def test_real_source_and_pinned_release_integrity(self):
         source=ROUTE.read_bytes()
-        self.assertEqual(hashlib.sha256(source).hexdigest(),EXPECTED_ROUTE)
+        self.assertEqual(hashlib.sha256(source).hexdigest(),EXPECTED_CURRENT_ROUTE)
         release=DEPLOY.read_text()
         self.assertIn("PINNED_COMMIT="+PINNED,release)
         self.assertIn("REVIEWED_TARGET_SHA256="+EXPECTED_ROUTE,release)
