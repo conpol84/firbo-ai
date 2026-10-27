@@ -84,6 +84,17 @@ class ImageReleaseTests(unittest.TestCase):
         self.assertIn('docker tag "$IMAGE" "$BACKUP"',text)
         self.assertIn('docker tag "$BACKUP" "$IMAGE"',text)
         self.assertIn('python3 "$TMP/scripts/accept-browser-direct-read-no-model.py"',text)
+        # An actual Browser/Playwright instance must pass the new network
+        # policy BEFORE old image retagging or OpenJarvis service restart.
+        before_image=text.index("FIRBO_BROWSER_IMAGE_BYTES_PASS")
+        smoke=text.index("FIRBO_BROWSER_OFFLINE_CHROMIUM_EGRESS_PASS")
+        backup=text.index('docker tag "$IMAGE" "$BACKUP"')
+        switch=text.index('docker tag "$CANDIDATE" "$IMAGE"')
+        assert before_image<smoke<backup<switch
+        self.assertIn('--network none --read-only --init',text)
+        self.assertIn('page.goto("http://169.254.169.254/latest/meta-data/"',text)
+        self.assertIn('browser_direct_http_denied',text)
+        self.assertIn('timeout 45 docker run',text)
 
     def test_no_reconfiguration_second_server_or_paid_provider(self):
         s=SCRIPT.read_text()
