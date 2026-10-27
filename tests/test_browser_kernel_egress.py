@@ -155,16 +155,17 @@ class GuardTests(unittest.TestCase):
 
 class DeploymentTests(unittest.TestCase):
     def test_existing_root_browser_wrapper_changes_only_single_network_line(self):
-        original=(
-          "#!/usr/bin/env bash\nset -euo pipefail\n"
-          "exec /usr/bin/docker run --rm -i --init \\\n"
-          "  --network bridge \\\n"
-          "  --read-only \\\n"
-          "  --cap-drop ALL \\\n"
-          "  --security-opt no-new-privileges \\\n"
-          "  --security-opt seccomp=/root/seccomp.json \\\n"
-          "  firbo-browser-mcp:0.2.0\n"
-        )
+        slash=chr(92)
+        original="\\n".join([
+          "#!/usr/bin/env bash","set -euo pipefail",
+          "exec /usr/bin/docker run --rm -i --init "+slash,
+          "  --network bridge "+slash,
+          "  --read-only "+slash,
+          "  --cap-drop ALL "+slash,
+          "  --security-opt no-new-privileges "+slash,
+          "  --security-opt seccomp=/root/seccomp.json "+slash,
+          "  firbo-browser-mcp:0.2.0",
+        ])+"\\n"
         updated=release.patch_wrapper(original)
         self.assertIn("  --network "+fw.NETWORK+" \\\n",updated)
         self.assertNotIn("  --network bridge \\\n",updated)
@@ -186,7 +187,6 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("FIRBO_BROWSER_EGRESS_GUARD_PERSISTENT_ON_OPENJARVIS_START",s)
         self.assertIn("ExecStartPre=+",s)
         self.assertIn("FIRBO_BROWSER_KERNEL_PRIVATE_NETWORK_NEGATIVE_PASS",s)
-        self.assertIn('socket.connect(65534',s) if False else None
         for forbidden in (
           "docker system prune","docker compose down",
           "docker network prune","--network host",
