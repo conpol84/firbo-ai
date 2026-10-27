@@ -17,7 +17,7 @@ SESSION_WRAPPER=/usr/local/sbin/firbo-browser-session-create
 die(){ echo "FIRBO_EGRESS_RELEASE_BLOCKED: $*" >&2; exit 1; }
 [[ "$MODE" == --check || "$MODE" == --apply ]] || die "expected --check or --apply"
 [[ $(id -u) -eq 0 ]] || die "requires existing VPS root shell"
-for command in git python3 node docker curl sha256sum systemctl flock tar; do
+for command in git python3 docker curl sha256sum systemctl flock tar chmod; do
  command -v "$command" >/dev/null || die "missing required command $command"
 done
 exec 9>/run/lock/firbo-browser-route-release.lock
@@ -49,9 +49,18 @@ SRC="$TMP/services/browser-mcp"
 grep -q 'installBrowserNetworkPolicy(context)' "$SRC/server.mjs" || die "missing network guard"
 grep -q 'serviceWorkers: "block"' "$SRC/server.mjs" || die "missing service worker guard"
 grep -q 'COPY server.mjs create-session.mjs network-policy.mjs' "$SRC/Dockerfile" || die "missing image bundling"
-node --check "$SRC/server.mjs"
-node --check "$SRC/network-policy.mjs"
-node --test "$TMP/tests/browser-network-policy.test.mjs" >/dev/null || die "source network negative tests failed"
+# No Node executable or npm install is required on the VPS host. Verify
+# the staged public source using the ALREADY installed, isolated browser image
+# as a read-only test runtime before touching its image tag.
+for folder in "$TMP" "$TMP/services" "$SRC" "$TMP/tests"; do
+ chmod 0755 "$folder"
+done
+docker run --rm --network none --read-only -v "$TMP:/staged:ro" --entrypoint node "$IMAGE" \
+ --check /staged/services/browser-mcp/server.mjs || die "reviewed server syntax failed"
+docker run --rm --network none --read-only -v "$TMP:/staged:ro" --entrypoint node "$IMAGE" \
+ --check /staged/services/browser-mcp/network-policy.mjs || die "reviewed egress syntax failed"
+docker run --rm --network none --read-only -v "$TMP:/staged:ro" --entrypoint node "$IMAGE" \
+ --test /staged/tests/browser-network-policy.test.mjs >/dev/null || die "source network negative tests failed"
 echo FIRBO_BROWSER_EGRESS_SOURCE_TESTS_PASS
 unauth_status(){
  curl -sS --max-time 4 -X POST -H 'content-type: application/json' \
