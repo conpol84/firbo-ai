@@ -254,10 +254,10 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     # Playwright DOM extraction without invoking a model. Never extend this
     # path to summaries, searches, links, clicks, forms or an unknown suffix.
     simple_read = bool(re.fullmatch(
-        r"(?:and\\s+|then\\s+)?(?:read|extract)\\s+(?:the\\s+)?"
-        r"(?:first|opening)\\s+(?:visible\\s+)?paragraph"
-        r"|(?:και\\s+)?(?:διάβασε|διαβασε)\\s+την\\s+(?:πρώτη|πρωτη)\\s+"
-        r"(?:(?:ορατή|ορατη)\\s+)?(?:παράγραφο|παραγραφο)",
+        r"(?:and\s+|then\s+)?(?:read|extract)\s+(?:the\s+)?"
+        r"(?:first|opening)\s+(?:visible\s+)?paragraph"
+        r"|(?:και\s+)?(?:διάβασε|διαβασε)\s+την\s+(?:πρώτη|πρωτη)\s+"
+        r"(?:(?:ορατή|ορατη)\s+)?(?:παράγραφο|παραγραφο)",
         tail, re.I,
     )) and not search_seed and not search
     known_tail = not tail or bool(title_only) or bool(read_title_only) or simple_read
@@ -573,7 +573,7 @@ def _browser_first_paragraph(tool: Any, session_id: str, expected_url: str) -> d
     """
     code = (
         "const p=page.locator('main p:visible, article p:visible, "
-        "[role=\\\"main\\\"] p:visible, body p:visible').first();"
+        "[role=main] p:visible, body p:visible').first();"
         "const text=(await p.innerText({timeout:8000})).trim().slice(0,2000);"
         "return {url:page.url(),title:await page.title(),"
         "selection:'first_visible_paragraph',text};"
