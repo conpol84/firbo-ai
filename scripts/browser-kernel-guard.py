@@ -212,6 +212,13 @@ def remove()->None:
     # Incomplete installer failures may leave a strict PREFIX of our rules;
     # only those exact known rules may be removed. Unknown/broader rules
     # must remain blocked and require owner's manual reconciliation.
+    # If the firewall backend cannot be queried, stop the rollback rather
+    # than treating a failed read as an absent chain and erasing our manifest.
+    if (not ipt("-S","INPUT",checked=False)
+        or not ipt("-S","FORWARD",checked=False)
+        or not v6ipt("-S","INPUT",checked=False)
+        or not v6ipt("-S","FORWARD",checked=False)):
+        raise RuntimeError("firewall_backend_unavailable_for_cleanup")
     chain_exists=bool(ipt("-S",CHAIN,checked=False))
     if chain_exists:
         assert_known_rules(prefix_only=True)
