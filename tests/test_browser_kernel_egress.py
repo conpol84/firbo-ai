@@ -156,7 +156,7 @@ class GuardTests(unittest.TestCase):
 class DeploymentTests(unittest.TestCase):
     def test_existing_root_browser_wrapper_changes_only_single_network_line(self):
         slash=chr(92)
-        original="\\n".join([
+        original=chr(10).join([
           "#!/usr/bin/env bash","set -euo pipefail",
           "exec /usr/bin/docker run --rm -i --init "+slash,
           "  --network bridge "+slash,
@@ -165,7 +165,7 @@ class DeploymentTests(unittest.TestCase):
           "  --security-opt no-new-privileges "+slash,
           "  --security-opt seccomp=/root/seccomp.json "+slash,
           "  firbo-browser-mcp:0.2.0",
-        ])+"\\n"
+        ])+chr(10)
         updated=release.patch_wrapper(original)
         self.assertIn("  --network "+fw.NETWORK+" "+slash,updated)
         self.assertNotIn("  --network bridge "+slash,updated)
