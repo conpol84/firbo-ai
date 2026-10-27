@@ -20,7 +20,7 @@ SESSION_WRAPPER=/usr/local/sbin/firbo-browser-session-create
 die(){ echo "FIRBO_EGRESS_RELEASE_BLOCKED: $*" >&2; exit 1; }
 [[ "$MODE" == --check || "$MODE" == --apply ]] || die "expected --check or --apply"
 [[ $(id -u) -eq 0 ]] || die "requires existing VPS root shell"
-for command in git python3 docker curl sha256sum systemctl flock tar chmod; do
+for command in git python3 docker curl sha256sum systemctl flock tar chmod timeout; do
  command -v "$command" >/dev/null || die "missing required command $command"
 done
 exec 9>/run/lock/firbo-browser-route-release.lock
@@ -142,6 +142,41 @@ if(await publicBrowserUrl("https://rebind.example/",{resolve:priv}))process.exit
 console.log("FIRBO_BROWSER_IMAGE_EGRESS_NEGATIVE_PASS");
 ' || die "image-level network negative acceptance failed"
 echo FIRBO_BROWSER_IMAGE_BYTES_PASS
+# Before touching the old image tag, start one REAL headless Playwright page
+# with NO network namespace. This proves the installed Playwright objects
+# support the guard and that a browser route blocks metadata/private egress.
+# This is test-only, not an external request or a paid/browser task.
+timeout 45 docker run --rm --network none --read-only --init \
+ --cap-drop ALL --security-opt no-new-privileges \
+ --memory 1024m --cpus 1 --pids-limit 180 --shm-size 512m \
+ --tmpfs /tmp:rw,nosuid,size=256m \
+ --tmpfs /home/pwuser/.cache:rw,nosuid,size=64m \
+ --entrypoint node "$CANDIDATE" --input-type=module -e '
+import {chromium} from "playwright";
+import {installBrowserNetworkPolicy} from "/app/network-policy.mjs";
+const browser=await chromium.launch({
+ headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]
+});
+try{
+ const context=await browser.newContext({serviceWorkers:"block",acceptDownloads:false});
+ await installBrowserNetworkPolicy(context,{
+  resolve:async()=>[{address:"1.1.1.1",family:4}]
+ });
+ const page=await context.newPage();
+ await page.goto("data:text/html,<p>FIRBO_OFFLINE_POLICY</p>");
+ if(await page.locator("p").innerText()!=="FIRBO_OFFLINE_POLICY")process.exit(22);
+ let denied=false;
+ try{
+  await page.goto("http://169.254.169.254/latest/meta-data/",{timeout:3500});
+ }catch{denied=true;}
+ if(!denied)process.exit(23);
+ let directDenied=false;
+ try{await context.request.get("http://127.0.0.1/");}
+ catch(error){directDenied=String(error?.message).includes("browser_direct_http_denied");}
+ if(!directDenied)process.exit(24);
+ console.log("FIRBO_BROWSER_OFFLINE_CHROMIUM_EGRESS_PASS");
+}finally{await browser.close();}
+' || die "candidate Chromium policy smoke test failed; old image remains active"
 # Retain exact previous content-addressed image under a root-owned backup tag.
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="firbo-browser-mcp:rollback-$STAMP"
