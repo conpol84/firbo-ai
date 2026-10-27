@@ -23,13 +23,20 @@ class ReviewedBrowserDeployTests(unittest.TestCase):
         self.assertNotIn('SKIP_SHA', text)
         self.assertNotIn('ALLOW_UNKNOWN', text)
 
-    def test_reviewed_target_is_pinned_exactly_to_source_sha(self):
+    def test_historical_pr37_release_is_pinned_and_new_route_not_implicitly_approved(self):
         text = SCRIPT.read_text()
         self.assertIn("REVIEWED_PR37_COMMIT=" + REVIEWED_COMMIT, text)
         self.assertIn("REVIEWED_PR37_ROUTE_SHA256=" + REVIEWED_SHA, text)
-        self.assertEqual(hashlib.sha256(ROUTE.read_bytes()).hexdigest(), REVIEWED_SHA)
+        # Preserve the old host release pin: a newer route is NOT automatically
+        # eligible for the old script's --apply action.
         self.assertIn('"$PINNED_COMMIT" == "$REVIEWED_PR37_COMMIT"', text)
         self.assertIn('"$CANDIDATE_SHA" == "$REVIEWED_PR37_ROUTE_SHA256"', text)
+        self.assertIn('[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256"', text)
+        self.assertNotIn("EXPECTED_PR40_SHA256=", text)
+        self.assertNotEqual(hashlib.sha256(ROUTE.read_bytes()).hexdigest(), REVIEWED_SHA)
+        self.assertIn("def _browser_first_paragraph(", ROUTE.read_text())
+        # A future PR40 install requires separately pinned source & host SHA,
+        # backup, rollback, dry-run and explicit owner approval.
 
     def test_preflight_backup_rollback_and_shell_syntax_preserved(self):
         text = SCRIPT.read_text()
