@@ -269,6 +269,28 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
     }
 
 
+
+def _safe_browser_failure_class(error: Exception) -> str:
+    """Bounded failure category; never return arbitrary exception text or metadata."""
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, (ConnectionError, OSError)):
+        return "transport"
+    if isinstance(error, (ValueError, TypeError)):
+        return "invalid_response"
+    if isinstance(error, RuntimeError):
+        return "runtime"
+    # Provider SDK exceptions are recognized by exact TYPE name only,
+    # not by untrusted error strings or their URLs/body.
+    return {
+        "APITimeoutError": "timeout",
+        "APIConnectionError": "transport",
+        "RateLimitError": "rate_limited",
+        "AuthenticationError": "provider_auth",
+        "PermissionDeniedError": "provider_auth",
+    }.get(type(error).__name__, "unknown")
+
+
 def _browser_execution_diagnostics(
     mode: str, configured_model: str, elapsed_ms: int, calls: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1097,8 +1119,31 @@ Rules:
                     "tools": browser_calls,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            # Preserve the first failure rather than allowing cleanup errors to
+            # replace it. Never log the raw exception, prompt, URL or page text.
+            failure_class = _safe_browser_failure_class(exc)
+            try:
+                print(json.dumps({
+                    "event": "firbo_browser_react_failed",
+                    "failure_class": failure_class,
+                    "failure_stage": "agent_execution",
+                    "request_id": request_id,
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "model_calls_started": max(0, min(agent_budget["models"], MAX_TURNS)),
+                    "tool_calls_started": max(0, min(agent_budget["tools"], MAX_TURNS)),
+                }), flush=True)
+            except Exception:
+                pass  # Do not replace the original browser failure.
             if close_tool is not None:
-                await asyncio.to_thread(_close_session_tool, close_tool, session_id)
-            return execution_response(503, {"error": "browser_execution_failed"})
+                try:
+                    await asyncio.to_thread(_close_session_tool, close_tool, session_id)
+                except Exception:
+                    pass  # Cleanup is best-effort; status remains failed.
+            return execution_response(503, {
+                "error": "browser_execution_failed",
+                "failure_class": failure_class,
+                "failure_stage": "agent_execution",
+            })
 
