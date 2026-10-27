@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
+import { installBrowserNetworkPolicy } from "./network-policy.mjs";
 
 const MAX_CODE_BYTES = 100_000;
 const MAX_LOG_BYTES = 64 * 1024;
@@ -135,7 +136,14 @@ async function sessionState(sessionId) {
       locale: "en-US",
       colorScheme: "dark",
       ignoreHTTPSErrors: false,
+      serviceWorkers: "block",
+      acceptDownloads: false,
+      permissions: [],
     });
+    // The browser MCP worker has no user-owned internal-network authority.
+    // Install BEFORE newPage or any external navigation. No fallback to an
+    // unrestricted context if DNS/network guards fail.
+    await installBrowserNetworkPolicy(context);
     context.setDefaultTimeout(15_000);
     context.setDefaultNavigationTimeout(25_000);
     const page = await context.newPage();
