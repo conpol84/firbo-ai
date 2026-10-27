@@ -138,20 +138,31 @@ def policy_rules()->list[str]:
     return [line.strip() for line in ipt("-S",CHAIN).splitlines()
             if line.strip().startswith("-A ")]
 
-def assert_policy()->None:
-    # Chain count + -C each rule prevent unknown user-provided rules.
+def rule_forms()->list[set[str]]:
+    # iptables -S may render the implicit tcp/udp match explicitly.
+    # Check the EXACT ordered policy, not just DROP/RETURN counts or -C,
+    # which can be bypassed by an earlier broad RETURN/ACCEPT.
+    drop=[{f"-A {CHAIN} -d {cidr} -j DROP"} for cidr in BOGONS]
+    ports=[{
+        f"-A {CHAIN} -p {proto} --dport {port} -j RETURN",
+        f"-A {CHAIN} -p {proto} -m {proto} --dport {port} -j RETURN",
+    } for proto,port in ALLOWED_PORTS]
+    return drop+ports+[{f"-A {CHAIN} -j DROP"}]
+
+def assert_known_rules(*,prefix_only:bool=False)->None:
     lines=policy_rules()
-    if len(lines)!=len(expected()):
+    forms=rule_forms()
+    if len(lines)>len(forms) or (not prefix_only and len(lines)!=len(forms)):
         raise RuntimeError("firewall_rule_count_drift")
+    for i,line in enumerate(lines):
+        if line not in forms[i]:
+            raise RuntimeError("firewall_rule_order_or_content_drift")
+
+def assert_policy()->None:
+    assert_known_rules()
     for rule in expected():
         if not present(CHAIN,*rule):
             raise RuntimeError("firewall_rule_missing")
-    drop_count=len(BOGONS)
-    if (not all("-j DROP" in line for line in lines[:drop_count])
-        or not all("-j RETURN" in line for line in
-                   lines[drop_count:drop_count+len(ALLOWED_PORTS)])
-        or "-j DROP" not in lines[-1]):
-        raise RuntimeError("firewall_rule_order_drift")
 
 def verify()->None:
     if os.geteuid()!=0:
@@ -197,6 +208,13 @@ def ensure()->None:
 def remove()->None:
     if os.geteuid()!=0:
         raise RuntimeError("root_required")
+    # Fail before removing any hooks if a third party altered this chain.
+    # Incomplete installer failures may leave a strict PREFIX of our rules;
+    # only those exact known rules may be removed. Unknown/broader rules
+    # must remain blocked and require owner's manual reconciliation.
+    chain_exists=bool(ipt("-S",CHAIN,checked=False))
+    if chain_exists:
+        assert_known_rules(prefix_only=True)
     # Cleanup is restricted to one uniquely named chain and bridge. Never
     # flush other firewall chains or touch DROP/ACCEPT default policies.
     if present("DOCKER-USER",*JUMP):
@@ -207,14 +225,7 @@ def remove()->None:
         v6ipt("-D","INPUT",*V6_DROP)
     if v6present("FORWARD",*V6_DROP):
         v6ipt("-D","FORWARD",*V6_DROP)
-    if ipt("-S",CHAIN,checked=False):
-        # No third-party/unrecognised rules may be removed.
-        lines=policy_rules()
-        for line in lines:
-            if not (line.startswith(f"-A {CHAIN} ")
-                    and any(flag in line for flag in
-                            ("-j DROP","-j RETURN"))):
-                raise RuntimeError("foreign_chain_rule_refused")
+    if chain_exists:
         ipt("-F",CHAIN)
         ipt("-X",CHAIN)
 
