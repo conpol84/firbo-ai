@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --ignore-scripts=false
 
-COPY server.mjs create-session.mjs ./
+COPY server.mjs create-session.mjs network-policy.mjs ./
 
 USER pwuser
 ENV HOME=/home/pwuser
