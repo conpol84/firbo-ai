@@ -11,6 +11,12 @@ EXPECTED_PR29_SHA256=b91640bee02142aaa60f5196f5d2cc93aec0f7f71f86540e507ca9f1645
 EXPECTED_PR30_SHA256=73d9c253e55d4885343a63c05bfeb1a7494168b4e54a12449baeb79a65d48c8f
 # Owner-installed PR #31; confirmed by release and diagnostic receipts.
 EXPECTED_PR31_SHA256=6693f080b4faaa170dd922f75c0a9efbb24c84c121806ebaafd2c4b607460c97
+# Canonical FIRBO runtime main 3be14c52 (#36); owner installed file verified
+# via exact SHA-256 against this repository's committed Python source.
+EXPECTED_PR36_SHA256=0a87e75af771551049b43ccf5db649560d6d3c828a01f32510f59eb270b24fc3
+# Reviewed safe-failure release #37 (no public URLs/exceptions in output).
+REVIEWED_PR37_COMMIT=c1b006d2d0776598a63eb36c8e69a7ed16a3e5a4
+REVIEWED_PR37_ROUTE_SHA256=e23b5aa1cd6bdaa223cd80283dc3fe6aaa471a666b03255d84d0c337b7e39bbf
 VENV_PY=/home/jarvis/.openjarvis/.venv/bin/python
 MODE=--check
 if [[ $# -gt 0 ]]; then MODE="$1"; fi
@@ -88,11 +94,16 @@ CURRENT_SHA="$(sha256sum "$ROUTE" | cut -d' ' -f1)"
 CANDIDATE_SHA="$(sha256sum "$SOURCE" | cut -d' ' -f1)"
 echo "CURRENT_BROWSER_SHA256=$CURRENT_SHA"
 echo "TARGET_BROWSER_SHA256=$CANDIDATE_SHA"
+# For the currently reviewed PR #37 release, require the EXACT reviewed bytes.
+if [[ "$PINNED_COMMIT" == "$REVIEWED_PR37_COMMIT" ]]; then
+ [[ "$CANDIDATE_SHA" == "$REVIEWED_PR37_ROUTE_SHA256" ]] \
+  || die "PR #37 route bytes differ from reviewed source"
+fi
 if [[ "$CURRENT_SHA" == "$CANDIDATE_SHA" ]]; then
  echo FIRBO_BROWSER_ROUTE_ALREADY_CURRENT
  exit 0
 fi
-[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR30_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR31_SHA256" ]] \
+[[ "$CURRENT_SHA" == "$EXPECTED_BASE_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR29_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR30_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR31_SHA256" || "$CURRENT_SHA" == "$EXPECTED_PR36_SHA256" ]] \
  || die "installed route differs from reviewed baselines; preserve and reconcile local changes first"
 if [[ "$MODE" == --check ]]; then
  echo FIRBO_BROWSER_ROUTE_UPGRADE_NEEDED
