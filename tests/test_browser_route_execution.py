@@ -5,6 +5,8 @@ This verifies control flow, not authenticated live-browser acceptance.
 """
 import ast
 import asyncio
+import contextlib
+import io
 import hmac
 import ipaddress
 import json
@@ -228,6 +230,32 @@ class BrowserRouteTests(unittest.TestCase):
         self.assertFalse(result["playback_verified"])
         self.assertIn("sign-in",result["result"])
         self.assertEqual(Agent.invocations,[])
+
+    def test_initial_agent_failure_returns_safe_typed_503_and_audited_event(self):
+        class CrashingAgent(Agent):
+            def run(self,prompt):
+                raise TimeoutError("PRIVATE url https://example.com?token=secret")
+        scope["OrchestratorAgent"]=CrashingAgent
+        buffer=io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            status,result,_=self.invoke("Open https://example.com and read the first paragraph")
+        self.assertEqual(status,503)
+        self.assertEqual(result["error"],"browser_execution_failed")
+        self.assertEqual(result["failure_class"],"timeout")
+        self.assertEqual(result["failure_stage"],"agent_execution")
+        self.assertEqual(result["diagnostics"]["mode"],"react")
+        audit=json.loads(buffer.getvalue().strip().splitlines()[-1])
+        self.assertEqual(audit["event"],"firbo_browser_react_failed")
+        self.assertEqual(audit["failure_class"],"timeout")
+        self.assertNotIn("PRIVATE",buffer.getvalue()+json.dumps(result))
+        self.assertNotIn("secret",buffer.getvalue()+json.dumps(result))
+
+    def test_provider_exception_name_classification_is_strict_and_secret_free(self):
+        classify=scope["_safe_browser_failure_class"]
+        self.assertEqual(classify(type("RateLimitError",(Exception,),{})("PRIVATE")),"rate_limited")
+        self.assertEqual(classify(type("AuthenticationError",(Exception,),{})("PRIVATE")),"provider_auth")
+        self.assertEqual(classify(type("UntrustedPrivateToken",(Exception,),{})("PRIVATE")),"unknown")
+        self.assertEqual(classify(RuntimeError("PRIVATE")),"runtime")
 
     def test_recovery_error_preserves_the_incomplete_receipt(self):
         class FailingRecoveryAgent(Agent):
