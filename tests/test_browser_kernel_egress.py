@@ -167,8 +167,8 @@ class DeploymentTests(unittest.TestCase):
           "  firbo-browser-mcp:0.2.0",
         ])+"\\n"
         updated=release.patch_wrapper(original)
-        self.assertIn("  --network "+fw.NETWORK+" \\\n",updated)
-        self.assertNotIn("  --network bridge \\\n",updated)
+        self.assertIn("  --network "+fw.NETWORK+" "+slash,updated)
+        self.assertNotIn("  --network bridge "+slash,updated)
         self.assertIn(release.GUARD_COMMAND,updated)
         self.assertEqual(updated.count(release.GUARD_COMMAND),1)
         self.assertIn("--security-opt seccomp=/root/seccomp.json",updated)
