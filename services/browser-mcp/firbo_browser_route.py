@@ -250,7 +250,17 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         r"(?:and\s+)?(?:read\s+|show\s+(?:me\s+)?|tell\s+me\s+)(?:the\s+)?page\s+title",
         tail, re.I,
     )
-    known_tail = not tail or bool(title_only) or bool(read_title_only)
+    # A literal first-paragraph request can be fulfilled by fixed, read-only
+    # Playwright DOM extraction without invoking a model. Never extend this
+    # path to summaries, searches, links, clicks, forms or an unknown suffix.
+    simple_read = bool(re.fullmatch(
+        r"(?:and\s+|then\s+)?(?:read|extract)\s+(?:the\s+)?"
+        r"(?:first|opening)\s+(?:visible\s+)?paragraph"
+        r"|(?:και\s+)?(?:διάβασε|διαβασε)\s+την\s+(?:πρώτη|πρωτη)\s+"
+        r"(?:(?:ορατή|ορατη)\s+)?(?:παράγραφο|παραγραφο)",
+        tail, re.I,
+    )) and not search_seed and not search
+    known_tail = not tail or bool(title_only) or bool(read_title_only) or simple_read
     if search:
         simple_search = re.fullmatch(
             r"(?:in\s+(?:the\s+)?cloud\s+browser\s*)?"
@@ -265,7 +275,8 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
         "url": url,
         "hostname": hostname,
         "expected_title": expected.group(1).strip() if expected else None,
-        "complete_on_navigation": not search_seed and (not needs_more or bool(read_title_only)) and known_tail,
+        "complete_on_navigation": not simple_read and not search_seed and (not needs_more or bool(read_title_only)) and known_tail,
+        "read_first_paragraph": bool(simple_read),
     }
 
 
@@ -551,6 +562,55 @@ def _browser_step(tool: Any, session_id: str, url: str) -> dict[str, Any]:
         page = {}
     verified = evidence["success"] and payload.get("ok") is True and bool(page.get("url"))
     return {"evidence": evidence, "verified": verified, "page": page}
+
+
+def _browser_first_paragraph(tool: Any, session_id: str, expected_url: str) -> dict[str, Any]:
+    """Read only a real, visible DOM paragraph through the existing exact session.
+
+    Do not trust webpage instructions, model prose, titles alone or arbitrary
+    tool output. Accept one bounded Playwright observation tied to the verified
+    navigation URL. This is extraction, not summarization or a model call.
+    """
+    code = (
+        "const p=page.locator('main p:visible, article p:visible, "
+        "[role=main] p:visible, body p:visible').first();"
+        "const text=(await p.innerText({timeout:8000})).trim().slice(0,2000);"
+        "return {url:page.url(),title:await page.title(),"
+        "selection:'first_visible_paragraph',text};"
+    )
+    evidence = _tool_result(tool.execute(session_id=session_id, code=code))
+    try:
+        payload = json.loads(evidence["output"])
+    except (ValueError, TypeError):
+        payload = {}
+    page = payload.get("page") if isinstance(payload, dict) else None
+    value = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(page, dict) or not isinstance(value, dict):
+        return {"verified": False, "text": "", "evidence": evidence}
+    observed = page.get("url")
+    paragraph = value.get("text")
+    title = page.get("title")
+    verified = (
+        evidence["success"] is True
+        and payload.get("ok") is True
+        and observed == expected_url
+        and isinstance(observed, str)
+        and isinstance(title, str) and bool(title.strip())
+        and value.get("url") == observed
+        and value.get("title") == title
+        and value.get("selection") == "first_visible_paragraph"
+        and isinstance(paragraph, str)
+        and 30 <= len(paragraph.strip()) <= 2000
+        and not re.search(
+            r"captcha|sign.?in|log.?in|verify.*human|not a bot|access denied",
+            title + "\\n" + paragraph[:500], re.I,
+        )
+    )
+    return {
+        "verified": bool(verified),
+        "text": paragraph.strip()[:1600] if verified else "",
+        "evidence": evidence,
+    }
 
 
 
@@ -974,6 +1034,46 @@ def install_firbo_browser_route(router) -> None:
                 })
 
             direct_note = f"Already navigated to {observed_url} (page title: {observed_title})."
+            if direct["read_first_paragraph"]:
+                # No external model/fallback is ever attempted for this exact
+                # read-only intent. A failed DOM observation is FAILED, not a
+                # fabricated paragraph or an unpriced retry.
+                read = {"verified": False, "text": "", "evidence": None}
+                if not _browser_session_was_closed(request.app, session_id):
+                    try:
+                        read = await asyncio.to_thread(
+                            _browser_first_paragraph,
+                            execute_tool, session_id, observed_url,
+                        )
+                    except Exception:
+                        pass
+                if read["evidence"] is not None:
+                    direct_evidence.append(read["evidence"])
+                receipt = _browser_goal_acceptance(goal, direct_evidence)
+                success = (
+                    read["verified"] and receipt["execution_verified"]
+                    and not _browser_session_was_closed(request.app, session_id)
+                )
+                return execution_response(200, {
+                    "contract": "firbo-browser-execution/v1",
+                    "request_id": request_id,
+                    "organization_id": organization_id,
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "status": "COMPLETED" if success else "FAILED",
+                    "provider": "selfhosted-playwright",
+                    "result": (
+                        f"First visible paragraph from {observed_title}: "
+                        + read["text"]
+                    ) if success else "The first paragraph could not be verified from the requested page.",
+                    "execution_verified": bool(success),
+                    "verified_steps": receipt["verified_steps"] if success else ["navigate"],
+                    "missing_steps": [] if success else ["read"],
+                    "tool_observations": receipt["tool_observations"],
+                    "tool_count": len(direct_evidence),
+                    "failed_count": 0 if success else 1,
+                    "tools": direct_evidence,
+                })
             if not direct["complete_on_navigation"]:
                 try:
                     observed = await asyncio.to_thread(
