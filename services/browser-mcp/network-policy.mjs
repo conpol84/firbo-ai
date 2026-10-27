@@ -22,7 +22,7 @@ for(const [address,prefix] of [
 ]) blocked.addSubnet(address,prefix,'ipv4');
 for(const [address,prefix] of [
  ['::',128],['::1',128],['::ffff:0:0',96],['64:ff9b:1::',48],
- ['100::',64],['2001:db8::',32],['2001:10::',28],
+ ['100::',64],['2001::',32],['2001:db8::',32],['2001:10::',28],['2002::',16],
  ['fc00::',7],['fe80::',10],['ff00::',8],
 ]) blocked.addSubnet(address,prefix,'ipv6');
 
