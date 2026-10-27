@@ -21,7 +21,7 @@ for(const [address,prefix] of [
  ['240.0.0.0',4],
 ]) blocked.addSubnet(address,prefix,'ipv4');
 for(const [address,prefix] of [
- ['::',128],['::1',128],['::ffff:0:0',96],['64:ff9b:1::',48],
+ ['::',128],['::1',128],['64:ff9b:1::',48],
  ['100::',64],['2001::',32],['2001:db8::',32],['2001:10::',28],['2002::',16],
  ['fc00::',7],['fe80::',10],['ff00::',8],
 ]) blocked.addSubnet(address,prefix,'ipv6');
@@ -38,6 +38,8 @@ export function globallyRoutableAddress(address){
  if(family===6){
   // Only global IPv6 unicast space (2000::/3), with known special-use
   // subnets excluded. Mapped IPv4 is always denied.
+  // Do not add ::ffff:0:0/96 to Node BlockList: it also maps ALL IPv4
+  // addresses, including public ones, into that range.
   if(normalized.startsWith('::')||normalized.startsWith('0:'))return false;
   const head=parseInt(normalized.split(':')[0],16);
   return Number.isInteger(head)&&head>=0x2000&&head<=0x3fff
