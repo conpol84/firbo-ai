@@ -261,7 +261,7 @@ async function blocked(host){
     if "FIRBO_BROWSER_KERNEL_PRIVATE_NETWORK_NEGATIVE_PASS" not in result:
         raise RuntimeError("kernel_negative_probe_unverified")
 
-def restore_state(manifest:dict)->None:
+def restore_state(manifest:dict)->bool:
     """Rollback only the files/network/rules CREATED by this installer."""
     backup=Path(manifest["backup_dir"])
     original=backup/"firbo-browser-mcp"
@@ -298,8 +298,9 @@ def restore_state(manifest:dict)->None:
         if STATE.is_file():
             STATE.unlink()
         print("FIRBO_BROWSER_KERNEL_ROLLBACK_COMPLETE")
-    else:
-        print("FIRBO_BROWSER_KERNEL_ROLLBACK_INCOMPLETE_OWNER_REVIEW_REQUIRED")
+        return True
+    print("FIRBO_BROWSER_KERNEL_ROLLBACK_INCOMPLETE_OWNER_REVIEW_REQUIRED")
+    return False
 
 def apply()->None:
     original=before()
@@ -377,7 +378,8 @@ def main()->int:
             manifest=json.loads(STATE.read_text())
             if manifest.get("target_network")!=fw.NETWORK:
                 raise RuntimeError("rollback_manifest_wrong_network")
-            restore_state(manifest)
+            if not restore_state(manifest):
+                raise RuntimeError("rollback_incomplete")
         return 0
     except (RuntimeError,OSError,KeyError,ValueError,
             urllib.error.URLError,subprocess.TimeoutExpired):
