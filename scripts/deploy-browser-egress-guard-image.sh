@@ -10,6 +10,9 @@ umask 077
 MODE=--check
 if [[ $# -gt 0 ]]; then MODE="$1"; fi
 PINNED_SOURCE_COMMIT=e43a9739cae043f787646b62177f4e407c523ebd
+# Owner previously accepted this existing Browser image before PR42.
+# Refuse unknown Docker base bytes; preserve installed Node/dependency versions.
+PINNED_EXISTING_IMAGE_SOURCE=f53d632cf49af0c1c483370ecbb038a31489e16d
 IMAGE=firbo-browser-mcp:0.2.0
 CANDIDATE=firbo-browser-mcp:egress-guard-pr42
 WRAPPER=/usr/local/sbin/firbo-browser-mcp
@@ -17,7 +20,7 @@ SESSION_WRAPPER=/usr/local/sbin/firbo-browser-session-create
 die(){ echo "FIRBO_EGRESS_RELEASE_BLOCKED: $*" >&2; exit 1; }
 [[ "$MODE" == --check || "$MODE" == --apply ]] || die "expected --check or --apply"
 [[ $(id -u) -eq 0 ]] || die "requires existing VPS root shell"
-for command in git python3 docker curl sha256sum systemctl flock tar chmod; do
+for command in git python3 docker curl sha256sum systemctl flock tar chmod timeout; do
  command -v "$command" >/dev/null || die "missing required command $command"
 done
 exec 9>/run/lock/firbo-browser-route-release.lock
@@ -29,6 +32,7 @@ case "$REMOTE" in
  *) die "wrong source repository";;
 esac
 git -C "$ROOT" cat-file -e "$PINNED_SOURCE_COMMIT^{commit}" || die "reviewed PR42 source commit missing"
+git -C "$ROOT" cat-file -e "$PINNED_EXISTING_IMAGE_SOURCE^{commit}" || die "reviewed old Browser image source missing"
 [[ -f "$WRAPPER" && ! -L "$WRAPPER" && -f "$SESSION_WRAPPER" && ! -L "$SESSION_WRAPPER" ]] || die "existing wrappers missing or symlinked"
 grep -Fq 'firbo-browser-mcp:0.2.0' "$WRAPPER" || die "unexpected existing MCP image tag"
 grep -Fq 'firbo-browser-mcp:0.2.0' "$SESSION_WRAPPER" || die "unexpected session factory image tag"
@@ -46,6 +50,13 @@ git -C "$ROOT" archive "$PINNED_SOURCE_COMMIT" \
  tests/browser-network-policy.test.mjs \
  scripts/accept-browser-direct-read-no-model.py | tar -xf - -C "$TMP"
 SRC="$TMP/services/browser-mcp"
+# Exact pre-PR42 source snapshot for the INSTALLED image, independent of
+# mutable on-disk checkout and Docker tag state.
+mkdir -p "$TMP/expected-installed"
+git -C "$ROOT" archive "$PINNED_EXISTING_IMAGE_SOURCE" \
+ services/browser-mcp/server.mjs \
+ services/browser-mcp/create-session.mjs \
+ services/browser-mcp/package.json | tar -xf - -C "$TMP/expected-installed"
 grep -q 'installBrowserNetworkPolicy(context)' "$SRC/server.mjs" || die "missing network guard"
 grep -q 'serviceWorkers: "block"' "$SRC/server.mjs" || die "missing service worker guard"
 grep -q 'COPY server.mjs create-session.mjs network-policy.mjs' "$SRC/Dockerfile" || die "missing image bundling"
@@ -75,21 +86,50 @@ ACTUAL_HASH="$(docker run --rm --network none --entrypoint sha256sum "$IMAGE" /a
 echo "FIRBO_BROWSER_EGRESS_CURRENT_IMAGE_ID=$PREVIOUS_ID"
 echo "FIRBO_BROWSER_EGRESS_TARGET_POLICY_SHA256=$TARGET_HASH"
 if [[ "$ACTUAL_HASH" == "$TARGET_HASH" ]]; then
+ source_server="$(sha256sum "$SRC/server.mjs" | cut -d' ' -f1)"
+ installed_server="$(docker run --rm --network none --entrypoint sha256sum "$IMAGE" /app/server.mjs | awk '{print $1}')"
+ [[ "$source_server" == "$installed_server" ]] || die "existing guarded image server differs from reviewed source"
  echo FIRBO_BROWSER_EGRESS_IMAGE_ALREADY_CURRENT
  exit 0
 fi
+# An unreviewed image can contain different Playwright/npm dependencies even
+# if its external tag is the same. Reject it before building or restarting.
+for file in server.mjs create-session.mjs package.json; do
+ source_sha="$(sha256sum "$TMP/expected-installed/services/browser-mcp/$file" | cut -d' ' -f1)"
+ image_sha="$(docker run --rm --network none --entrypoint sha256sum "$IMAGE" "/app/$file" | awk '{print $1}')"
+ [[ "$source_sha" == "$image_sha" ]] || die "installed Browser image differs from owner-accepted $file"
+done
+echo FIRBO_BROWSER_INSTALLED_IMAGE_PROVENANCE_PASS
 if [[ "$MODE" == --check ]]; then
  echo FIRBO_BROWSER_EGRESS_UPGRADE_NEEDED
  echo "Dry-run passed; --apply replaces ONLY the reviewed Docker image tag and restarts OpenJarvis with rollback."
  exit 0
 fi
-# Image build leaves the installed old image/tag and current service untouched.
-docker build --pull=false -t "$CANDIDATE" "$SRC" >/dev/null || die "candidate image build failed"
-for file in server.mjs network-policy.mjs create-session.mjs package.json; do
+# Build a two-file overlay on the EXISTING verified image. The PR42 Dockerfile
+# uses npm install without a package-lock, so DO NOT execute it: that would
+# silently pull unreviewed transitive packages. This overlay retains the
+# identical installed Playwright, SDK, Node, OS, and create-session versions.
+# No npm, package registry, extra container privileges or network needed.
+cat >"$TMP/egress-overlay.Dockerfile" <<'DOCKERFILE'
+FROM firbo-browser-mcp:0.2.0
+COPY --chown=pwuser:pwuser server.mjs network-policy.mjs /app/
+DOCKERFILE
+docker build --pull=false --network none \
+ -f "$TMP/egress-overlay.Dockerfile" \
+ -t "$CANDIDATE" "$SRC" >/dev/null || die "reviewed overlay image build failed"
+for file in server.mjs network-policy.mjs; do
  source_hash="$(sha256sum "$SRC/$file" | cut -d' ' -f1)"
  image_hash="$(docker run --rm --network none --entrypoint sha256sum "$CANDIDATE" "/app/$file" | awk '{print $1}')"
  [[ "$source_hash" == "$image_hash" ]] || die "candidate image differs from pinned $file"
 done
+# Unmodified auxiliary code and dependencies are still byte-identical to the
+# original owner-verified image after the overlay.
+for file in create-session.mjs package.json; do
+ source_hash="$(sha256sum "$TMP/expected-installed/services/browser-mcp/$file" | cut -d' ' -f1)"
+ image_hash="$(docker run --rm --network none --entrypoint sha256sum "$CANDIDATE" "/app/$file" | awk '{print $1}')"
+ [[ "$source_hash" == "$image_hash" ]] || die "overlay modified preexisting $file"
+done
+echo FIRBO_BROWSER_EGRESS_NO_NEW_DEPENDENCIES_PASS
 # Simulated DNS fixtures inside the BUILT isolated image, never a private request.
 docker run --rm --network none --entrypoint node "$CANDIDATE" \
  --input-type=module -e '
@@ -102,6 +142,41 @@ if(await publicBrowserUrl("https://rebind.example/",{resolve:priv}))process.exit
 console.log("FIRBO_BROWSER_IMAGE_EGRESS_NEGATIVE_PASS");
 ' || die "image-level network negative acceptance failed"
 echo FIRBO_BROWSER_IMAGE_BYTES_PASS
+# Before touching the old image tag, start one REAL headless Playwright page
+# with NO network namespace. This proves the installed Playwright objects
+# support the guard and that a browser route blocks metadata/private egress.
+# This is test-only, not an external request or a paid/browser task.
+timeout 45 docker run --rm --network none --read-only --init \
+ --cap-drop ALL --security-opt no-new-privileges \
+ --memory 1024m --cpus 1 --pids-limit 180 --shm-size 512m \
+ --tmpfs /tmp:rw,nosuid,size=256m \
+ --tmpfs /home/pwuser/.cache:rw,nosuid,size=64m \
+ --entrypoint node "$CANDIDATE" --input-type=module -e '
+import {chromium} from "playwright";
+import {installBrowserNetworkPolicy} from "/app/network-policy.mjs";
+const browser=await chromium.launch({
+ headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]
+});
+try{
+ const context=await browser.newContext({serviceWorkers:"block",acceptDownloads:false});
+ await installBrowserNetworkPolicy(context,{
+  resolve:async()=>[{address:"1.1.1.1",family:4}]
+ });
+ const page=await context.newPage();
+ await page.goto("data:text/html,<p>FIRBO_OFFLINE_POLICY</p>");
+ if(await page.locator("p").innerText()!=="FIRBO_OFFLINE_POLICY")process.exit(22);
+ let denied=false;
+ try{
+  await page.goto("http://169.254.169.254/latest/meta-data/",{timeout:3500});
+ }catch{denied=true;}
+ if(!denied)process.exit(23);
+ let directDenied=false;
+ try{await context.request.get("http://127.0.0.1/");}
+ catch(error){directDenied=String(error?.message).includes("browser_direct_http_denied");}
+ if(!directDenied)process.exit(24);
+ console.log("FIRBO_BROWSER_OFFLINE_CHROMIUM_EGRESS_PASS");
+}finally{await browser.close();}
+' || die "candidate Chromium policy smoke test failed; old image remains active"
 # Retain exact previous content-addressed image under a root-owned backup tag.
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="firbo-browser-mcp:rollback-$STAMP"
