@@ -134,6 +134,12 @@ def before()->str:
         raise RuntimeError("openjarvis_not_active")
     if not fw.docker_iptables_backend():
         raise RuntimeError("docker_firewall_backend_unreviewed")
+    # IPv6 native link-local must also be kernel-filterable before creating
+    # any dedicated bridge. Never fall back to IPv4-only enforcement.
+    if not fw.v6ipt("-S","INPUT",checked=False) or not fw.v6ipt("-S","FORWARD",checked=False):
+        raise RuntimeError("ipv6_firewall_unavailable")
+    if fw.v6present("INPUT",*fw.V6_DROP) or fw.v6present("FORWARD",*fw.V6_DROP):
+        raise RuntimeError("ipv6_hook_name_conflict")
     if fw.ipt("-S",fw.CHAIN,checked=False):
         raise RuntimeError("old_kernel_chain_conflict")
     if fw.present("DOCKER-USER",*fw.JUMP) or fw.present("INPUT",*fw.HOST_DROP):
