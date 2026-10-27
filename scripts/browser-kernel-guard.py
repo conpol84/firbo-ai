@@ -38,6 +38,9 @@ BOGONS=(
 ALLOWED_PORTS=(("tcp","80"),("tcp","443"),("tcp","53"),("udp","53"),("udp","443"))
 JUMP=("-i",BRIDGE,"-j",CHAIN)
 HOST_DROP=("-i",BRIDGE,"-j","DROP")
+# Even with Docker EnableIPv6=false, protect against link-local IPv6 packets
+# on a bridge whose kernel auto-configures IPv6 independently.
+V6_DROP=("-i",BRIDGE,"-j","DROP")
 
 def run(*argv:str,checked:bool=True)->str:
     p=subprocess.run(argv,capture_output=True,text=True,timeout=12,check=False)
@@ -55,6 +58,22 @@ def present(*args:str)->bool:
         return p.returncode==0
     except (OSError,subprocess.TimeoutExpired):
         return False
+
+def v6ipt(*args:str,checked:bool=True)->str:
+    return run("ip6tables","-w","3",*args,checked=checked)
+
+def v6present(*args:str)->bool:
+    try:
+        p=subprocess.run(("ip6tables","-w","3","-C",*args),
+                         capture_output=True,timeout=8,check=False)
+        return p.returncode==0
+    except (OSError,subprocess.TimeoutExpired):
+        return False
+
+def v6_first_rule(chain:str)->str:
+    rules=[line.strip() for line in v6ipt("-S",chain).splitlines()
+           if line.strip().startswith("-A ")]
+    return rules[0] if rules else ""
 
 def network_record()->dict:
     raw=run("docker","network","inspect",NETWORK)
@@ -137,6 +156,11 @@ def verify()->None:
     network_record()
     if not docker_iptables_backend():
         raise RuntimeError("backend_not_iptables")
+    if (not v6present("INPUT",*V6_DROP)
+        or not v6present("FORWARD",*V6_DROP)
+        or v6_first_rule("INPUT")!=f"-A INPUT -i {BRIDGE} -j DROP"
+        or v6_first_rule("FORWARD")!=f"-A FORWARD -i {BRIDGE} -j DROP"):
+        raise RuntimeError("ipv6_kernel_hooks_missing")
     if (not present("DOCKER-USER",*JUMP)
         or not present("INPUT",*HOST_DROP)
         or first_rule("DOCKER-USER")!=
@@ -161,6 +185,10 @@ def ensure()->None:
         ipt("-I","DOCKER-USER","1",*JUMP)
     if not present("INPUT",*HOST_DROP):
         ipt("-I","INPUT","1",*HOST_DROP)
+    if not v6present("FORWARD",*V6_DROP):
+        v6ipt("-I","FORWARD","1",*V6_DROP)
+    if not v6present("INPUT",*V6_DROP):
+        v6ipt("-I","INPUT","1",*V6_DROP)
     verify()
 
 def remove()->None:
@@ -172,6 +200,10 @@ def remove()->None:
         ipt("-D","DOCKER-USER",*JUMP)
     if present("INPUT",*HOST_DROP):
         ipt("-D","INPUT",*HOST_DROP)
+    if v6present("INPUT",*V6_DROP):
+        v6ipt("-D","INPUT",*V6_DROP)
+    if v6present("FORWARD",*V6_DROP):
+        v6ipt("-D","FORWARD",*V6_DROP)
     if ipt("-S",CHAIN,checked=False):
         # No third-party/unrecognised rules may be removed.
         lines=policy_rules()
@@ -199,6 +231,8 @@ def main()->int:
             network_record()
             if not docker_iptables_backend():
                 raise RuntimeError("backend_not_iptables")
+            if not v6ipt("-S","INPUT",checked=False) or not v6ipt("-S","FORWARD",checked=False):
+                raise RuntimeError("ipv6_firewall_unavailable")
         print("FIRBO_BROWSER_KERNEL_"+sys.argv[1].upper()+"_PASS")
         return 0
     except (RuntimeError,OSError,subprocess.TimeoutExpired,
