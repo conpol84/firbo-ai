@@ -68,6 +68,7 @@ def network_record()->dict:
     if (row.get("Name")!=NETWORK or row.get("Driver")!="bridge"
         or row.get("Internal") is not False or row.get("EnableIPv6") is not False
         or options.get("com.docker.network.bridge.name")!=BRIDGE
+        or options.get("com.docker.network.bridge.enable_icc")!="false"
         or labels.get(LABEL)!=LABEL_VALUE
         or not isinstance(ipam,list) or len(ipam)!=1
         or not ipam[0].get("Gateway") or not ipam[0].get("Subnet")):
@@ -76,7 +77,13 @@ def network_record()->dict:
 
 def docker_iptables_backend()->bool:
     # Native nftables does not use DOCKER-USER as an enforcement point.
-    if run("nft","list","table","ip","docker-bridges",checked=False):
+    # The nft executable is optional on hosts whose Docker is using
+    # iptables-nft. Still reject an actual native nftables Docker table.
+    try:
+        native_nft=run("nft","list","table","ip","docker-bridges",checked=False)
+    except (OSError,subprocess.TimeoutExpired):
+        native_nft=""
+    if native_nft:
         return False
     cfg="/etc/docker/daemon.json"
     if os.path.isfile(cfg):
