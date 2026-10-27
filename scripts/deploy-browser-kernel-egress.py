@@ -24,7 +24,6 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -33,7 +32,13 @@ import time
 import urllib.error
 import urllib.request
 
-import browser_kernel_guard as fw
+import importlib.util
+from pathlib import Path
+_guard_file=Path(__file__).resolve().with_name("browser-kernel-guard.py")
+_spec=importlib.util.spec_from_file_location("firbo_browser_kernel_guard",_guard_file)
+assert _spec and _spec.loader
+fw=importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fw)
 
 ROOT=Path(__file__).resolve().parents[1]
 WRAPPER=Path("/usr/local/sbin/firbo-browser-mcp")
