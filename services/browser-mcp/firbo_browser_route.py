@@ -698,7 +698,10 @@ def _browser_goal_acceptance(goal: str, calls: list[dict[str, Any]]) -> dict[str
                 completed.add("play")
         except (TypeError,ValueError):
             pass
-        extracted=value.get("results") or value.get("items") or value.get("text")
+        # A genuine DOM paragraph observation may be returned as firstParagraph.
+        # It still must come from a successful, HTTPS, page-bound tool receipt.
+        extracted=(value.get("results") or value.get("items") or value.get("text")
+                   or value.get("firstParagraph") or value.get("first_paragraph"))
         if isinstance(extracted,list) and len(extracted)>0:
             completed.add("read")
         if isinstance(extracted,str) and len(extracted.strip())>=30:
