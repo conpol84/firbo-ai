@@ -115,8 +115,11 @@ def docker_iptables_backend()->bool:
                 return False
         except (ValueError,OSError,TypeError):
             return False
+    # DOCKER-USER must be the FIRST forwarded rule. An earlier ACCEPT
+    # on FORWARD bypasses all our scoped policy despite -C succeeding.
     return bool(ipt("-S","DOCKER-USER",checked=False)
-                and present("FORWARD","-j","DOCKER-USER"))
+                and present("FORWARD","-j","DOCKER-USER")
+                and first_rule("FORWARD")=="-A FORWARD -j DOCKER-USER")
 
 def expected()->list[tuple[str,...]]:
     return (
