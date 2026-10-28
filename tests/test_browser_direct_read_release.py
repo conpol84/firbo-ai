@@ -15,7 +15,7 @@ DEPLOY=ROOT/"scripts/deploy-browser-read-v1.sh"
 ACCEPT=ROOT/"scripts/accept-browser-direct-read-no-model.py"
 EXPECTED_ROUTE="06cb981ab0c7c3fee69fad1fb6dc40822cec62ced7f82faba2aa70880b42f8ba"
 # New source-only verifier adjustment; the historical pinned release remains immutable.
-EXPECTED_CURRENT_ROUTE="4829c541697be2a04a6acb7fae39f26d95b698aad607cfc91c43ef4993d927e3"
+EXPECTED_CURRENT_ROUTE="8a0f75a58790345d6973b2409e39e459b7acf6d3962ff94a84a6cf916e88c8ef"
 EXPECTED_PREVIOUS="e23b5aa1cd6bdaa223cd80283dc3fe6aaa471a666b03255d84d0c337b7e39bbf"
 PINNED="2fa884437a4f46aebf139223475398d9ee2404f2"
 spec=importlib.util.spec_from_file_location("firbo_browser_direct_read_acceptance",ACCEPT)

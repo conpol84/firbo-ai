@@ -309,8 +309,9 @@ def _site_search_read_plan(goal: str) -> dict[str, str] | None:
         r"[,;]?\s*(?:and\s+)?search\s+(?:for\s+)?(?P<term>.+?)"
         r"\s*(?:,\s*|\s+and\s+)"
         r"(?:(?:open|click|select)\s+(?:the\s+)?(?:first\s+)?"
+        r"(?:(?P<article_label>[a-z0-9][a-z0-9\s-]{0,100})\s+)?"
         r"(?:article|result|link)\s*(?:,\s*|\s+and\s+))?"
-        r"(?:read|extract)\s+(?:the\s+)?(?:first|opening)\s+"
+        r"(?:read|extract)\s+(?:(?:the|its)\s+)?(?:first|opening)\s+"
         r"(?:visible\s+)?paragraph"
         r"(?:\s+and\s+close\s+(?:the\s+)?browser\s+session)?[.!]?",
         tail, re.I | re.S,
@@ -319,6 +320,11 @@ def _site_search_read_plan(goal: str) -> dict[str, str] | None:
         return None
     term = match.group("term").strip(" .,\"'")
     if not (1 <= len(term) <= 120) or "://" in term or re.search(r"[\x00-\x1f\x7f]", term):
+        return None
+    # "Open the Cyprus article" is an exact owner instruction, not license
+    # to click a loosely matching result. Keep the label equal to the query.
+    label = match.group("article_label")
+    if label and " ".join(label.casefold().split()) != " ".join(term.casefold().split()):
         return None
     return {"url": url, "hostname": direct["hostname"], "query": term}
 

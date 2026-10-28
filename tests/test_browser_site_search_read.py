@@ -13,7 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote_plus, urlsplit
 
-ROUTE=Path(__file__).resolve().parents[1]/"services/browser-mcp/firbo_browser_route.py"
+ROOT=Path(__file__).resolve().parents[1]
+ROUTE=ROOT/"services/browser-mcp/firbo_browser_route.py"
 tree=ast.parse(ROUTE.read_text(encoding="utf-8"))
 names={
     "_tool_result","_direct_browser_plan","_site_search_read_plan",
@@ -84,6 +85,27 @@ class SiteSearchReadTests(unittest.TestCase):
         self.assertIsNotNone(plan(
             "Visit https://www.example.org, search for release notes, "
             "open the first result, read the first paragraph"))
+    def test_real_vps_acceptance_goal_selects_no_model_path(self):
+        # Use the ACTUAL operator acceptance script's literal goal. A parser
+        # fixture with different wording must not green-light a broken release.
+        acceptance=ast.parse((ROOT/"scripts/accept-browser-search-read.py").read_text())
+        actual=next(n.value for n in acceptance.body if isinstance(n,ast.Assign)
+                    and any(isinstance(t,ast.Name) and t.id=="GOAL" for t in n.targets))
+        goal=ast.literal_eval(actual)
+        selected=plan(goal)
+        self.assertIsNotNone(selected,goal)
+        self.assertEqual(selected["query"],"Cyprus")
+        fake=FakeBrowser()
+        result=run(fake,SESSION,selected)
+        self.assertTrue(result["execution_verified"])
+        self.assertEqual(result["tool_count"],3)
+
+    def test_article_name_must_match_requested_term(self):
+        bad="Open https://www.wikipedia.org and search for Cyprus, open the Greece article and read its first paragraph"
+        self.assertIsNone(plan(bad))
+        good="Open https://www.wikipedia.org and search for Cyprus, open the Cyprus article and read its first paragraph"
+        self.assertEqual(plan(good)["query"],"Cyprus")
+
     def test_no_unsafe_navigation_or_hidden_writes(self):
         for goal in [
             "Open https://127.0.0.1, search for Cyprus, read the first paragraph",
