@@ -13,7 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote_plus, urlsplit
 
-ROUTE=Path(__file__).resolve().parents[1]/"services/browser-mcp/firbo_browser_route.py"
+ROOT=Path(__file__).resolve().parents[1]
+ROUTE=ROOT/"services/browser-mcp/firbo_browser_route.py"
 tree=ast.parse(ROUTE.read_text(encoding="utf-8"))
 names={
     "_tool_result","_direct_browser_plan","_site_search_read_plan",
