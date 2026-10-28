@@ -656,6 +656,182 @@ def _browser_first_paragraph(tool: Any, session_id: str, expected_url: str) -> d
 
 
 
+
+def _site_browser_receipt(tool: Any, session_id: str, code: str) -> dict[str, Any]:
+    """One real MCP observation, never model prose or a fabricated receipt."""
+    evidence = _tool_result(tool.execute(session_id=session_id, code=code))
+    try:
+        parsed = json.loads(evidence["output"])
+    except (TypeError, ValueError):
+        parsed = {}
+    page = parsed.get("page") if isinstance(parsed, dict) else None
+    value = parsed.get("value") if isinstance(parsed, dict) else None
+    return {
+        "evidence": evidence,
+        "page": page if isinstance(page, dict) else {},
+        "value": value if isinstance(value, dict) else {},
+        "ok": evidence["success"] is True
+              and isinstance(parsed, dict) and parsed.get("ok") is True,
+    }
+
+
+def _site_search_submit(tool: Any, session_id: str, term: str,
+                        initial_url: str) -> dict[str, Any]:
+    """Press a visible site search input; verify an observed URL transition."""
+    code = (
+        "const box=page.locator("
+        "'input[type=\"search\"]:visible,input[name=\"search\"]:visible,"
+        "input#searchInput:visible,input[role=\"searchbox\"]:visible,"
+        "input[placeholder*=\"search\" i]:visible').first();"
+        "if(!(await box.count()))return {submitted:false};"
+        "const before=page.url();"
+        "await box.fill(" + json.dumps(term) + ",{timeout:7000});"
+        "await box.press('Enter',{timeout:8000});"
+        "try{await page.waitForURL(u=>String(u)!==before,{timeout:12000});}catch{}"
+        "return {submitted:true,term:" + json.dumps(term) + ",before,"
+        "after:page.url(),title:await page.title()};"
+    )
+    receipt = _site_browser_receipt(tool, session_id, code)
+    page, value = receipt["page"], receipt["value"]
+    after = value.get("after")
+    try:
+        before_host = (urlsplit(initial_url).hostname or "").lower()
+        parsed = urlsplit(after) if isinstance(after, str) else None
+        after_host = (parsed.hostname or "").lower() if parsed else ""
+        safe_domain = (
+            parsed is not None and parsed.scheme == "https"
+            and not parsed.username and not parsed.password
+            and parsed.port in (None, 443)
+            and len(before_host.split(".")) >= 2
+            and before_host.split(".")[-2:] == after_host.split(".")[-2:]
+        )
+        if safe_domain:
+            try:
+                safe_domain = ipaddress.ip_address(after_host).is_global
+            except ValueError:
+                safe_domain = after_host not in ("localhost",) and not after_host.endswith(
+                    (".local", ".internal", ".localhost", ".home", ".lan")
+                )
+    except (TypeError, ValueError):
+        safe_domain = False
+    receipt["verified"] = bool(
+        receipt["ok"] and safe_domain and value.get("submitted") is True
+        and value.get("term") == term
+        and value.get("before") == initial_url
+        and after != initial_url and after == page.get("url")
+        and isinstance(page.get("title"), str) and page.get("title").strip()
+        and page.get("title") == value.get("title")
+    )
+    return receipt
+
+
+def _site_open_exact_result(tool: Any, session_id: str, term: str,
+                            search_url: str) -> dict[str, Any]:
+    """Only choose an exact, visible same-host link; never arbitrary first hit."""
+    code = (
+        "const before=page.url();"
+        "const matches=page.getByRole('link',{name:" + json.dumps(term) +
+        ",exact:true});"
+        "let clicked=false;"
+        "for(let i=0;i<Math.min(await matches.count(),8);i++){"
+        "const link=matches.nth(i);if(!(await link.isVisible()))continue;"
+        "const href=await link.getAttribute('href');if(!href)continue;"
+        "const dest=new URL(href,before),source=new URL(before);"
+        "if(dest.protocol!=='https:'||dest.hostname!==source.hostname"
+        "||dest.port||dest.username||dest.password)continue;"
+        "await link.click({timeout:8000});clicked=true;break;"
+        "}"
+        "if(clicked){try{await page.waitForURL(u=>String(u)!==before,"
+        "{timeout:10000});}catch{}}"
+        "return {clicked,term:" + json.dumps(term) +
+        ",before,after:page.url(),title:await page.title()};"
+    )
+    receipt = _site_browser_receipt(tool, session_id, code)
+    page, value = receipt["page"], receipt["value"]
+    receipt["verified"] = bool(
+        receipt["ok"] and value.get("clicked") is True
+        and value.get("term") == term and value.get("before") == search_url
+        and isinstance(value.get("after"), str) and value["after"] != search_url
+        and value["after"] == page.get("url")
+        and isinstance(page.get("title"), str) and page["title"].strip()
+    )
+    return receipt
+
+
+def _site_search_read_run(tool: Any, session_id: str,
+                          plan: dict[str, str]) -> dict[str, Any]:
+    """Navigation → observed site-search → exact result → real paragraph.
+
+    Every step is owner-requested, read-only and uses the ONE existing
+    isolated browser session. The control plane owns terminal session close.
+    """
+    calls: list[dict[str, Any]] = []
+    complete: list[str] = []
+    page_url = ""
+    paragraph = ""
+    title = ""
+    try:
+        navigation = _browser_step(tool, session_id, plan["url"])
+        calls.append(navigation["evidence"])
+        page = navigation["page"]
+        page_url = str(page.get("url") or "")
+        hostname = (urlsplit(page_url).hostname or "").lower()
+        original = plan["hostname"].lower()
+        # Permit a normal www redirect but not an unexpected destination.
+        domain = original[4:] if original.startswith("www.") else original
+        if (not navigation["verified"] or not hostname
+                or not (hostname == domain or hostname.endswith("." + domain))):
+            raise ValueError("navigation_not_verified")
+        complete.append("navigate")
+        search = _site_search_submit(tool, session_id, plan["query"], page_url)
+        calls.append(search["evidence"])
+        if not search["verified"]:
+            raise ValueError("site_search_unverified")
+        complete.extend(["search", "interact"])
+        page_url = str(search["page"]["url"])
+        title = str(search["page"]["title"])
+        # Some sites redirect directly to a matching article; others show
+        # a search-results page that requires one verified exact-link click.
+        if (re.search(r"/search(?:/|[?#])|/results(?:/|[?#])|"
+                      r"[?&](?:q|query|search_query|search)=", page_url, re.I)
+                or re.search(r"\bsearch results\b", title, re.I)):
+            clicked = _site_open_exact_result(tool, session_id, plan["query"], page_url)
+            calls.append(clicked["evidence"])
+            if not clicked["verified"]:
+                raise ValueError("search_result_not_verified")
+            page_url = str(clicked["page"]["url"])
+            title = str(clicked["page"]["title"])
+        read = _browser_first_paragraph(tool, session_id, page_url)
+        calls.append(read["evidence"])
+        if not read["verified"]:
+            raise ValueError("site_paragraph_unverified")
+        complete.append("read")
+        paragraph = read["text"]
+    except Exception:
+        # No retry, no model call, and no exception text in the user receipt.
+        pass
+    success = set(complete) == {"navigate", "search", "interact", "read"}
+    missing = sorted({"navigate", "search", "interact", "read"} - set(complete))
+    return {
+        "status": "COMPLETED" if success else "FAILED",
+        "execution_verified": bool(success),
+        "verified_steps": sorted(complete),
+        "missing_steps": missing,
+        "tool_observations": sum(bool(item.get("success")) for item in calls),
+        "tool_count": len(calls),
+        "failed_count": sum(not item.get("success") for item in calls) if success else
+                        max(1, sum(not item.get("success") for item in calls)),
+        "result": (
+            "Read the first visible paragraph from " + title[:180] +
+            " (" + page_url[:500] + "): " + paragraph[:1600]
+            if success else
+            "Site search or article paragraph could not be verified from browser observations."
+        ),
+        "tools": calls,
+    }
+
+
+
 def _browser_goal_requirements(goal: str) -> set[str]:
     """Generic browser intents, not a catalog of sites, artists, or products."""
     # A reconstructed session may include a prior URL containing 'search'.
