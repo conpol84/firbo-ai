@@ -84,6 +84,11 @@ esac
 grep -q 'FIRBO_BROWSER_ROUTE_V1' "$REGISTER" || die "existing route registration missing"
 grep -q '^def install_firbo_browser_route(' "$ROUTE" || die "installed module is not the FIRBO route"
 systemctl is-active --quiet openjarvis.service || die "OpenJarvis service not active"
+GUARD=/usr/local/sbin/firbo-browser-kernel-guard
+[[ -x "$GUARD" ]] || die "previously accepted browser kernel isolation guard missing"
+[[ "$("$GUARD" verify)" == FIRBO_BROWSER_KERNEL_VERIFY_PASS ]] \
+ || die "browser kernel firewall isolation is not verified"
+echo FIRBO_BROWSER_KERNEL_VERIFY_PASS
 unauth_status(){
  curl -sS --max-time 4 -X POST -H 'content-type: application/json' \
  --data '{}' -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/v1/firbo/browser
@@ -149,6 +154,8 @@ done
 [[ "$READY" == 1 ]] || { echo FIRBO_BROWSER_POSTRESTART_HEALTH_FAILED >&2; false; }
 [[ "$(sha256sum "$ROUTE" | cut -d' ' -f1)" == "$CANDIDATE_SHA" ]] \
  || { echo FIRBO_BROWSER_DEPLOYED_BYTES_DIFFER >&2; false; }
+[[ "$("$GUARD" verify)" == FIRBO_BROWSER_KERNEL_VERIFY_PASS ]] \
+ || { echo FIRBO_BROWSER_KERNEL_GUARD_POSTRESTART_FAILED >&2; false; }
 ROLLBACK_NEEDED=0
 trap - ERR
 echo "FIRBO_BROWSER_SITE_SEARCH_ROUTE_RELEASE_PASS SHA=$PINNED_COMMIT"
