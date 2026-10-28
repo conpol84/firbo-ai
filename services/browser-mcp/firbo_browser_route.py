@@ -281,6 +281,48 @@ def _direct_browser_plan(goal: str) -> dict[str, Any] | None:
 
 
 
+
+def _site_search_read_plan(goal: str) -> dict[str, str] | None:
+    """Exact, read-only site-search + article paragraph intent; no model.
+
+    This is generic to public HTTPS websites with a visible search input.
+    Unknown instructions, private targets and implicit writes keep their
+    existing guarded agent path rather than claiming deterministic success.
+    """
+    command = re.sub(
+        r"^open\s+(?:the\s+)?cloud\s+browser(?:\s+now)?\s*[.,;:]\s*",
+        "", goal.strip(), count=1, flags=re.I,
+    )
+    start = re.match(
+        r"^(?:open|go\s+to|navigate\s+to|visit)\s+(?:to\s+)?(?:the\s+)?"
+        r"(https://[^\s,;<>\"']+)", command, re.I,
+    )
+    if not start:
+        return None
+    url = start.group(1).rstrip(".,;")
+    # Delegate ALL destination checks to the existing private/port rejection.
+    direct = _direct_browser_plan("Open " + url)
+    if not direct or direct["url"] != url or not direct["complete_on_navigation"]:
+        return None
+    tail = command[start.end():].strip()
+    match = re.fullmatch(
+        r"[,;]?\s*(?:and\s+)?search\s+(?:for\s+)?(?P<term>.+?)"
+        r"\s*(?:,\s*|\s+and\s+)"
+        r"(?:(?:open|click|select)\s+(?:the\s+)?(?:first\s+)?"
+        r"(?:article|result|link)\s*(?:,\s*|\s+and\s+))?"
+        r"(?:read|extract)\s+(?:the\s+)?(?:first|opening)\s+"
+        r"(?:visible\s+)?paragraph"
+        r"(?:\s+and\s+close\s+(?:the\s+)?browser\s+session)?[.!]?",
+        tail, re.I | re.S,
+    )
+    if not match:
+        return None
+    term = match.group("term").strip(" .,\"'")
+    if not (1 <= len(term) <= 120) or "://" in term or re.search(r"[\x00-\x1f\x7f]", term):
+        return None
+    return {"url": url, "hostname": direct["hostname"], "query": term}
+
+
 def _safe_browser_failure_class(error: Exception) -> str:
     """Bounded failure category; never return arbitrary exception text or metadata."""
     if isinstance(error, TimeoutError):
