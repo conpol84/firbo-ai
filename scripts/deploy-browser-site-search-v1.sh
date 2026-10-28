@@ -7,7 +7,7 @@
 set -Eeuo pipefail
 umask 077
 # Exact source accepted in OSS CI / secret scan before this script's creation.
-PINNED_COMMIT=3c3a7da9b77d49ff81c7d9dec1786852b6d67958
+PINNED_COMMIT=b68859e9256df3eee459093ee9af189271110935
 REVIEWED_TARGET_SHA256=8a0f75a58790345d6973b2409e39e459b7acf6d3962ff94a84a6cf916e88c8ef
 # Only reviewed historical route hashes are permitted, never arbitrary drift.
 EXPECTED_INSTALLED_PR40_SHA256=06cb981ab0c7c3fee69fad1fb6dc40822cec62ced7f82faba2aa70880b42f8ba

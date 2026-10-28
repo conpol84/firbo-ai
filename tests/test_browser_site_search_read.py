@@ -85,6 +85,19 @@ class SiteSearchReadTests(unittest.TestCase):
         self.assertIsNotNone(plan(
             "Visit https://www.example.org, search for release notes, "
             "open the first result, read the first paragraph"))
+    def test_native_openjarvis_fixture_cannot_be_intercepted_by_fast_path(self):
+        # Exercise actual separately installed OpenJarvis loop, not a direct
+        # Search/Read request that correctly requires zero model calls.
+        native=ast.parse((ROOT/"scripts/check-browser-native-contract.py").read_text())
+        node=next(n.value for n in native.body
+                  if isinstance(n,ast.Assign)
+                  and any(isinstance(t,ast.Name) and t.id=="REACT_GOAL" for t in n.targets))
+        native_goal=ast.literal_eval(node)
+        self.assertIsNone(plan(native_goal))
+        fallback=scope["_direct_browser_plan"](native_goal)
+        self.assertIsNotNone(fallback)
+        self.assertFalse(fallback["complete_on_navigation"])
+
     def test_real_vps_acceptance_goal_selects_no_model_path(self):
         # Use the ACTUAL operator acceptance script's literal goal. A parser
         # fixture with different wording must not green-light a broken release.
