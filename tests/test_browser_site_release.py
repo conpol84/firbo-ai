@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DEPLOY=ROOT/"scripts/deploy-browser-site-search-v1.sh"
 ROUTE=ROOT/"services/browser-mcp/firbo_browser_route.py"
-PINNED="3c3a7da9b77d49ff81c7d9dec1786852b6d67958"
+PINNED="c6d10ac67ee62361b145e060551796595aa682a9"
 TARGET="8a0f75a58790345d6973b2409e39e459b7acf6d3962ff94a84a6cf916e88c8ef"
 
 class BrowserSiteReleaseTests(unittest.TestCase):
