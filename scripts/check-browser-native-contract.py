@@ -18,6 +18,15 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 SESSION = "11111111-1111-4111-8111-111111111111"
 NAME = "browser_session_execute"
+# The direct Search -> article -> first-paragraph route is independently tested
+# by test_browser_site_search_read.py. Native tests below intentionally exercise
+# the *model* function-calling path with an open-ended summarization goal.
+# Do not accidentally retest the short-circuit fast path and conclude that
+# OpenJarvis native tool calling failed because no model call occurred.
+REACT_GOAL = (
+    "Open https://www.wikipedia.org and search for Cyprus, "
+    "then summarize the search results."
+)
 
 
 def native_call(code, session=SESSION, name=NAME):
@@ -78,9 +87,18 @@ class NativeContract(unittest.TestCase):
         self.tool = FixtureTool()
 
     def run_route(self, engine):
-        request = Request("Open https://www.wikipedia.org and search for Cyprus, open the Cyprus article and read its first paragraph.", self.tool)
+        request = Request(REACT_GOAL, self.tool)
         request.app.state.engine = engine
         return asyncio.run(self.handler(request))
+
+    def test_native_react_goal_remains_separate_from_verified_fast_path(self):
+        # The actual Wikipedia operator acceptance now correctly uses the
+        # deterministic zero-model search/read route. The native tests must
+        # still exercise OpenJarvis's real function-calling lane.
+        self.assertIsNone(scope["_site_search_read_plan"](REACT_GOAL))
+        self.assertEqual(scope["_browser_goal_requirements"](REACT_GOAL),
+                         {"navigate", "read", "search"})
+        self.assertFalse(scope["_direct_browser_plan"](REACT_GOAL)["complete_on_navigation"])
 
     def make_agent(self, engine, *, started=None, budget=None):
         self.request = Request("unused", self.tool)
