@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # FIRBO V1 site-search route: reviewed route-only deployment to the EXISTING
 # OpenJarvis service. NEVER touches Docker, Caddy, DB, models, or credentials.
-# This file is distinct from the old pinned PR37 release script.
-# Usage: bash scripts/deploy-browser-read-v1.sh --check
-#        bash scripts/deploy-browser-read-v1.sh --apply
+# Independent of the older pinned route installers; do not use them to upgrade.
+# Usage: bash scripts/deploy-browser-site-search-v1.sh --check
+#        bash scripts/deploy-browser-site-search-v1.sh --apply --owner-confirms-no-active-browser-tasks
 set -Eeuo pipefail
 umask 077
 # Exact source accepted in OSS CI / secret scan before this script's creation.
 PINNED_COMMIT=ef89295dc302c4651e94be39b85c625e0914d23f
 REVIEWED_TARGET_SHA256=4829c541697be2a04a6acb7fae39f26d95b698aad607cfc91c43ef4993d927e3
-# The owner's last signed installed source receipt (PR37). Refuse any drift.
+# Only reviewed historical route hashes are permitted, never arbitrary drift.
 EXPECTED_INSTALLED_PR40_SHA256=06cb981ab0c7c3fee69fad1fb6dc40822cec62ced7f82faba2aa70880b42f8ba
 EXPECTED_INSTALLED_PR48_SHA256=07705b57d55bd6134fa85717b8788df0ff3f5a98c437491804f1f1479a6e7fe6
 VENV_PY=/home/jarvis/.openjarvis/.venv/bin/python
