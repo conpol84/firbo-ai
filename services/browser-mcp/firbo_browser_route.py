@@ -1207,6 +1207,28 @@ def install_firbo_browser_route(router) -> None:
                 "tools": tools,
             })
 
+        # An explicit read-only site search needs observed DOM state, not
+        # another model-generated Playwright program after navigation.
+        # This path is generic to public HTTPS search forms and stays within
+        # the SAME session. Any unverified step fails closed without paid replay.
+        site_plan = _site_search_read_plan(goal)
+        if site_plan is not None:
+            mode = "navigation"
+            if _browser_session_was_closed(request.app, session_id):
+                return execution_response(409, {"error": "browser_session_closed"})
+            site = await asyncio.to_thread(
+                _site_search_read_run, execute_tool, session_id, site_plan
+            )
+            return execution_response(200, {
+                "contract": "firbo-browser-execution/v1",
+                "request_id": request_id,
+                "organization_id": organization_id,
+                "task_id": task_id,
+                "session_id": session_id,
+                "provider": "selfhosted-playwright",
+                **site,
+            })
+
         # Deterministic fast path for common low-risk navigation/search goals.
         # NativeReActAgent may return prose without calling any tool; a browser
         # task must never claim success from the model's intention alone.
